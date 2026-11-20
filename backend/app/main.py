@@ -34,17 +34,21 @@ class Unauthorized(StockError):
 
 
 def seed_admin() -> None:
+    """Create the first admin. Several workers start at once, so serialise with an advisory lock."""
     pw = os.environ.get("ADMIN_PASSWORD")
     with get_pool().connection() as conn:
-        n = conn.execute("SELECT count(*) AS n FROM users").fetchone()["n"]
-        if n == 0:
-            if not pw or len(pw) < 8:
-                raise RuntimeError("ADMIN_PASSWORD (min 8 chars) is required to create the first admin user")
-            role = conn.execute("SELECT role_id FROM roles WHERE role_code='ADMIN'").fetchone()["role_id"]
-            conn.execute(
-                "INSERT INTO users (username, password_hash, full_name, role_id) VALUES ('admin', %s, 'Administrator', %s)",
-                (hash_password(pw), role),
-            )
+        with conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(727001)")
+            n = conn.execute("SELECT count(*) AS n FROM users").fetchone()["n"]
+            if n == 0:
+                if not pw or len(pw) < 8:
+                    raise RuntimeError("ADMIN_PASSWORD (min 8 chars) is required to create the first admin user")
+                role = conn.execute("SELECT role_id FROM roles WHERE role_code='ADMIN'").fetchone()["role_id"]
+                conn.execute(
+                    "INSERT INTO users (username, password_hash, full_name, role_id) VALUES ('admin', %s, 'Administrator', %s) "
+                    "ON CONFLICT (username) DO NOTHING",
+                    (hash_password(pw), role),
+                )
 
 
 @asynccontextmanager

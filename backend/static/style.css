@@ -19,8 +19,8 @@ header.top {
   background: #14213d; color: #fff; padding: .6rem 1rem; position: sticky; top: 0; z-index: 10;
 }
 header.top .brand { font-weight: 600; margin-right: .5rem; }
-header.top nav { display: flex; gap: .25rem; flex-wrap: wrap; flex: 1; }
-header.top nav a { color: #cfd8ea; padding: .35rem .7rem; border-radius: 6px; }
+header.top nav { display: flex; gap: .1rem; flex-wrap: wrap; flex: 1; }
+header.top nav a { color: #cfd8ea; padding: .3rem .5rem; border-radius: 6px; font-size: .88rem; white-space: nowrap; }
 header.top nav a:hover { background: rgba(255,255,255,.1); text-decoration: none; }
 header.top nav a.active { background: var(--brand); color: #fff; }
 header.top .right { display: flex; gap: .75rem; align-items: center; }

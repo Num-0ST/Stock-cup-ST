@@ -97,3 +97,23 @@ def test_unauthenticated_and_tampered_tokens_rejected(client):
     assert c.get("/api/me").status_code == 401
     c.headers["Authorization"] = "Bearer not.a.jwt"
     assert c.get("/api/me").status_code == 401
+
+
+def test_concurrent_first_start_creates_exactly_one_admin():
+    """Several workers boot at once on an empty database (docker runs --workers 2)."""
+    import threading
+    from conftest import reset_db
+    from app.main import seed_admin
+    reset_db()
+    errs = []
+
+    def boot():
+        try:
+            seed_admin()
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+
+    th = [threading.Thread(target=boot) for _ in range(6)]
+    [t.start() for t in th]; [t.join() for t in th]
+    assert not errs, errs
+    assert q("SELECT count(*) n FROM users")[0]["n"] == 1
