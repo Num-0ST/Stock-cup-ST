@@ -1,0 +1,1075 @@
+/* Multi-Warehouse Inventory — single page app (no build step).
+   All text goes through t(); all DOM is built with h() (textContent only, so no HTML injection). */
+(() => {
+  'use strict';
+
+  const S = {
+    token: localStorage.getItem('wms_token'),
+    lang: localStorage.getItem('wms_lang') || 'th',
+    me: null, units: [], whs: [], categories: [],
+  };
+  const DOC_TYPES = ['RECEIVING', 'SALE', 'WITHDRAWAL', 'CUSTOMER_RETURN', 'SUPPLIER_RETURN'];
+  const PARTY = { SALE: 'customer', CUSTOMER_RETURN: 'customer', RECEIVING: 'supplier', SUPPLIER_RETURN: 'supplier' };
+
+  // ---------------------------------------------------------------- helpers
+  function t(key, vars) {
+    let s = (I18N[S.lang] && I18N[S.lang][key]);
+    if (s === undefined) s = I18N.en[key];
+    if (s === undefined) s = key;
+    if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(vars[k]);
+    return s;
+  }
+  const hasKey = (k) => (I18N[S.lang] && I18N[S.lang][k] !== undefined) || I18N.en[k] !== undefined;
+
+  function h(tag, props, ...kids) {
+    const el = document.createElement(tag);
+    let value;
+    for (const [k, v] of Object.entries(props || {})) {
+      if (k === 'class') el.className = v;
+      else if (k === 'value') value = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (v === true) el.setAttribute(k, '');
+      else if (v !== false && v != null) el.setAttribute(k, v);
+    }
+    for (const kid of kids.flat(Infinity)) {
+      if (kid == null || kid === false) continue;
+      el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    }
+    if (value !== undefined && value !== null) el.value = value;
+    return el;
+  }
+
+  const fmtNum = (n) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 });
+  const fmtDate = (d) => (d ? String(d).slice(0, 10) : '');
+  const fmtDateTime = (d) => (d ? String(d).replace('T', ' ').slice(0, 16) : '');
+  const today = () => new Date().toISOString().slice(0, 10);
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+
+  /** 53 PC with CT=24, PK=6 -> "2 CT + 1 PK + 5 PC" */
+  function breakdown(base, conversions) {
+    base = Number(base);
+    const convs = (conversions || []).slice().sort((a, b) => b.factor_to_base - a.factor_to_base);
+    if (!convs.length || base === 0) return '';
+    let rem = Math.abs(base);
+    const parts = [];
+    for (const c of convs) {
+      const n = Math.floor(rem / c.factor_to_base);
+      if (n > 0) { parts.push(n + ' ' + c.unit_code); rem -= n * c.factor_to_base; }
+    }
+    if (rem > 0 || !parts.length) parts.push(rem + ' PC');
+    return parts.join(' + ');
+  }
+
+  async function api(path, opt = {}) {
+    const headers = Object.assign(opt.form ? {} : { 'Content-Type': 'application/json' }, opt.headers || {});
+    if (S.token) headers.Authorization = 'Bearer ' + S.token;
+    const res = await fetch('/api' + path, {
+      method: opt.method || 'GET', headers,
+      body: opt.form ? opt.form : (opt.body !== undefined ? JSON.stringify(opt.body) : undefined),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* empty body */ }
+    if (!res.ok) {
+      if (res.status === 401 && S.token) { logout(); }
+      let err = data && data.error;
+      if (!err) err = { code: data && data.detail ? 'VALIDATION_ERROR' : 'HTTP_' + res.status, message: 'HTTP ' + res.status };
+      throw Object.assign(new Error(err.message), { code: err.code, detail: err, status: res.status });
+    }
+    return data;
+  }
+  const qs = (o) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(o)) if (v !== '' && v != null && v !== false) p.set(k, v);
+    const s = p.toString();
+    return s ? '?' + s : '';
+  };
+
+  function errText(e) {
+    const d = e.detail || {};
+    let key = 'err.' + (d.code_hint || e.code);
+    let msg = hasKey(key) ? t(key) : (e.message || t('err.UNKNOWN'));
+    if (e.code === 'INSUFFICIENT_STOCK' && Array.isArray(d.items)) {
+      msg += ' — ' + d.items.map((i) => `${i.product_code} (${t('err.available')} ${fmtNum(i.available)}, ${t('err.required')} ${fmtNum(i.required)})`).join('; ');
+    }
+    if (d.line) msg = t('lbl.line') + ' ' + d.line + ': ' + msg;
+    return msg;
+  }
+
+  let toastTimer;
+  function toast(msg, kind = 'ok') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast show ' + kind;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.className = 'toast'; }, kind === 'err' ? 8000 : 3000);
+  }
+  const fail = (e) => toast(errText(e), 'err');
+
+  const main = () => document.getElementById('main');
+  function view(...nodes) { const m = main(); m.replaceChildren(...nodes.flat()); window.scrollTo(0, 0); }
+  /** For pages that fetch before rendering: ignore the render if the user has navigated away meanwhile
+      (route() builds a fresh <main> every time, so a changed element means this page is stale). */
+  function viewFor() {
+    const el = main();
+    const v = (...nodes) => { if (main() !== el) return; el.replaceChildren(...nodes.flat()); window.scrollTo(0, 0); };
+    v.el = el;
+    return v;
+  }
+
+  function table(headers, rows, opts = {}) {
+    if (!rows.length) return h('p', { class: 'empty' }, t('lbl.noData'));
+    return h('div', { class: 'tablewrap' },
+      h('table', {},
+        h('thead', {}, h('tr', {}, headers.map((x) => h('th', { class: x.num ? 'num' : '' }, x.label || x)))),
+        h('tbody', {}, rows)));
+  }
+  const td = (v, num) => h('td', { class: num ? 'num' : '' }, v);
+
+  const docTypeLabel = (x) => t('doc.' + x);
+  const statusBadge = (s) => h('span', { class: 'badge ' + s.toLowerCase() }, t('status.' + s));
+
+  function field(label, input, cls) { return h('label', { class: 'field ' + (cls || '') }, h('span', {}, label), input); }
+  function select(options, value, props) {
+    return h('select', props || {}, options.map(([v, l]) => h('option', { value: v, selected: String(v) === String(value) }, l)));
+  }
+  const whOptions = (list, withAll) => [...(withAll ? [['', t('lbl.all')]] : []), ...list.map((w) => [w.warehouse_id, w.warehouse_code + ' — ' + w.name])];
+
+  async function loadRef() {
+    // /me is refreshed too: the warehouses a user may view/transact in change when warehouses are created
+    const [units, whs, cats, me] = await Promise.all([api('/units'), api('/warehouses'), api('/categories'), api('/me')]);
+    S.units = units; S.whs = whs; S.categories = cats; S.me = me;
+  }
+
+  const isAdmin = () => S.me.role_code === 'ADMIN';
+  const isManager = () => ['ADMIN', 'MANAGER'].includes(S.me.role_code);
+  const canMaster = () => ['ADMIN', 'MANAGER', 'STOREKEEPER'].includes(S.me.role_code);
+  const myDocTypes = () => {
+    if (S.me.role_code === 'VIEWER' || !S.me.transact_warehouses.length) return [];
+    if (S.me.role_code === 'SALES') return ['SALE', 'CUSTOMER_RETURN'];
+    return DOC_TYPES;
+  };
+  const canImport = () => ['ADMIN', 'MANAGER', 'STOREKEEPER', 'SALES'].includes(S.me.role_code) && S.me.transact_warehouses.length > 0;
+  const canTransfer = () => ['ADMIN', 'MANAGER', 'STOREKEEPER'].includes(S.me.role_code) && S.me.transact_warehouses.length > 0;
+  const myTransactWhs = () => S.whs.filter((w) => S.me.transact_warehouses.includes(w.warehouse_id));
+
+  // ---------------------------------------------------------------- shell
+  function renderShell() {
+    const app = document.getElementById('app');
+    if (!S.token || !S.me) { app.replaceChildren(loginView()); return; }
+    const links = [
+      ['#/stock', 'nav.stock'], ['#/docs', 'nav.docs'], ['#/movements', 'nav.movements'],
+      ['#/products', 'nav.products'], ['#/counts', 'nav.counts'], ['#/masters', 'nav.masters'],
+    ];
+    links.splice(3, 0, ['#/transfers', 'nav.transfers']);
+    if (canImport()) links.splice(3, 0, ['#/import', 'nav.import'], ['#/imports', 'nav.imports']);
+    if (isAdmin()) links.push(['#/users', 'nav.users']);
+    const cur = location.hash.split('/')[1] || 'stock';
+    app.replaceChildren(
+      h('header', { class: 'top' },
+        h('div', { class: 'brand' }, t('app.title')),
+        h('nav', {}, links.map(([href, key]) => h('a', { href, class: href.split('/')[1] === cur ? 'active' : '' }, t(key)))),
+        h('div', { class: 'right' },
+          langSelect(),
+          h('span', { class: 'who' }, S.me.full_name + ' · ' + S.me.role_code),
+          h('button', { class: 'link', onclick: logout }, t('btn.logout')))),
+      h('main', { id: 'main' }));
+  }
+
+  function langSelect() {
+    return h('select', { class: 'lang', 'aria-label': 'Language', onchange: (e) => setLang(e.target.value) },
+      [['th', 'ไทย'], ['en', 'English'], ['lo', 'ລາວ']].map(([v, l]) => h('option', { value: v, selected: v === S.lang }, l)));
+  }
+  function setLang(l) {
+    S.lang = l; localStorage.setItem('wms_lang', l);
+    document.documentElement.lang = l;
+    document.title = t('app.title');
+    if (S.me) { renderShell(); route(); } else renderShell();
+  }
+
+  function loginView() {
+    const u = h('input', { type: 'text', autocomplete: 'username', required: true });
+    const p = h('input', { type: 'password', autocomplete: 'current-password', required: true });
+    return h('div', { class: 'login' },
+      h('form', {
+        onsubmit: async (e) => {
+          e.preventDefault();
+          try {
+            const r = await api('/auth/login', { method: 'POST', body: { username: u.value.trim(), password: p.value } });
+            S.token = r.token; localStorage.setItem('wms_token', r.token);
+            await boot();
+          } catch (err) { fail(err); }
+        },
+      },
+      h('div', { class: 'lang-row' }, langSelect()),
+      h('h1', {}, t('app.title')),
+      field(t('lbl.username'), u), field(t('lbl.password'), p),
+      h('button', { class: 'primary', type: 'submit' }, t('btn.login'))));
+  }
+
+  function logout() {
+    S.token = null; S.me = null; localStorage.removeItem('wms_token');
+    renderShell();
+  }
+
+  // ---------------------------------------------------------------- stock balances
+  async function pageStock() {
+    const f = { view: 'by_warehouse', warehouse_id: '', q: '', low_only: false };
+    const box = h('div');
+    async function load() {
+      try {
+        const rows = await api('/stock/balances' + qs({ ...f, limit: 500 }));
+        const total = f.view === 'total';
+        box.replaceChildren(table(
+          [t('lbl.code'), t('lbl.product'), ...(total ? [t('lbl.byWarehouse')] : [t('lbl.warehouse')]),
+           { label: t('lbl.qtyPc'), num: true }, t('lbl.breakdown'), { label: t('lbl.reorder'), num: true }],
+          rows.map((r) => h('tr', { class: Number(r.qty_on_hand) <= Number(r.reorder_level) && r.reorder_level > 0 ? 'low' : '' },
+            td(r.product_code), td(r.name),
+            total ? td(r.by_warehouse.map((x) => x.warehouse_code + ': ' + fmtNum(x.qty_on_hand)).join(' · ')) : td(r.warehouse_code + ' — ' + r.warehouse_name),
+            td(fmtNum(r.qty_on_hand), true), td(breakdown(r.qty_on_hand, r.conversions)), td(fmtNum(r.reorder_level), true)))));
+      } catch (e) { fail(e); }
+    }
+    const q = h('input', { type: 'search', placeholder: t('lbl.searchProduct'), oninput: debounce((e) => { f.q = e.target.value; load(); }) });
+    view(h('h2', {}, t('nav.stock')),
+      h('div', { class: 'filters' },
+        field(t('lbl.view'), select([['by_warehouse', t('lbl.viewByWh')], ['total', t('lbl.viewTotal')]], f.view, { onchange: (e) => { f.view = e.target.value; load(); } })),
+        field(t('lbl.warehouse'), select(whOptions(S.whs, true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
+        field(t('btn.search'), q),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', onchange: (e) => { f.low_only = e.target.checked; load(); } }), t('lbl.lowOnly'))),
+      box);
+    load();
+  }
+
+  function debounce(fn, ms = 300) { let id; return (...a) => { clearTimeout(id); id = setTimeout(() => fn(...a), ms); }; }
+
+  // ---------------------------------------------------------------- documents
+  async function pageDocs() {
+    const f = { doc_type: '', warehouse_id: '', status: '', q: '', date_from: '', date_to: '' };
+    const box = h('div');
+    async function load() {
+      try {
+        const rows = await api('/documents' + qs({ ...f, limit: 200 }));
+        box.replaceChildren(table(
+          [t('lbl.date'), t('lbl.docType'), t('lbl.docNo'), t('lbl.warehouse'), t('lbl.party'), { label: t('lbl.lines'), num: true }, t('lbl.status'), t('lbl.createdBy')],
+          rows.map((r) => h('tr', { class: 'click', onclick: () => { location.hash = '#/doc/' + r.document_id; } },
+            td(fmtDate(r.doc_date)), td(docTypeLabel(r.doc_type)), td(r.doc_no), td(r.warehouse_name),
+            td(r.customer_name || r.supplier_name || ''), td(r.line_count, true), td(statusBadge(r.status)), td(r.created_by_name)))));
+      } catch (e) { fail(e); }
+    }
+    const newBtns = myDocTypes().map((x) => h('a', { class: 'btn', href: '#/new/' + x }, '+ ' + docTypeLabel(x)));
+    view(h('h2', {}, t('nav.docs')), h('div', { class: 'actions' }, newBtns),
+      h('div', { class: 'filters' },
+        field(t('lbl.docType'), select([['', t('lbl.all')], ...DOC_TYPES.map((x) => [x, docTypeLabel(x)])], '', { onchange: (e) => { f.doc_type = e.target.value; load(); } })),
+        field(t('lbl.warehouse'), select(whOptions(S.whs, true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
+        field(t('lbl.status'), select([['', t('lbl.all')], ...['DRAFT', 'POSTED', 'REVERSED'].map((x) => [x, t('status.' + x)])], '', { onchange: (e) => { f.status = e.target.value; load(); } })),
+        field(t('lbl.docNo'), h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) })),
+        field(t('lbl.dateFrom'), h('input', { type: 'date', onchange: (e) => { f.date_from = e.target.value; load(); } })),
+        field(t('lbl.dateTo'), h('input', { type: 'date', onchange: (e) => { f.date_to = e.target.value; load(); } }))),
+      box);
+    load();
+  }
+
+  async function pageDoc(id) {
+    const V = viewFor();
+    let d;
+    try { d = await api('/documents/' + id); } catch (e) { fail(e); if (main() === V.el) location.hash = '#/docs'; return; }
+    const isRev = d.reverses_document_id != null;
+    const act = [];
+    if (myDocTypes().includes(d.doc_type) && S.me.transact_warehouses.includes(d.warehouse_id)) {
+      if (d.status === 'DRAFT') {
+        act.push(h('button', { class: 'primary', onclick: async () => {
+          if (!confirm(t('msg.confirmPost'))) return;
+          try { await api(`/documents/${id}/post`, { method: 'POST', headers: { 'Idempotency-Key': 'post-' + id } }); toast(t('msg.posted')); pageDoc(id); } catch (e) { fail(e); }
+        } }, t('btn.post')));
+        act.push(h('button', { class: 'danger', onclick: async () => {
+          if (!confirm(t('msg.confirmDelete'))) return;
+          try { await api('/documents/' + id, { method: 'DELETE' }); toast(t('msg.deleted')); location.hash = '#/docs'; } catch (e) { fail(e); }
+        } }, t('btn.delete')));
+      }
+      if (d.status === 'POSTED' && !isRev && isManager()) {
+        act.push(h('button', { class: 'danger', onclick: async () => {
+          const reason = prompt(t('msg.reverseReason'));
+          if (reason === null) return;
+          try {
+            const r = await api(`/documents/${id}/reverse`, { method: 'POST', body: { reason: reason || null }, headers: { 'Idempotency-Key': 'rev-' + id } });
+            toast(t('msg.reversed')); location.hash = '#/doc/' + r.reversal_document_id;
+          } catch (e) { fail(e); }
+        } }, t('btn.reverse')));
+      }
+    }
+    const kv = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('b', {}, v ?? ''));
+    V(
+      h('p', {}, h('a', { href: '#/docs' }, '← ' + t('nav.docs'))),
+      h('h2', {}, docTypeLabel(d.doc_type) + ' ' + d.doc_no + ' ', statusBadge(d.status)),
+      h('div', { class: 'card grid' },
+        kv(t('lbl.date'), fmtDate(d.doc_date)), kv(t('lbl.warehouse'), d.warehouse_code + ' — ' + d.warehouse_name),
+        kv(t('lbl.party'), d.customer_name || d.supplier_name || '—'), kv(t('lbl.createdBy'), d.created_by_name + ' ' + fmtDateTime(d.created_at)),
+        d.posted_at ? kv(t('lbl.postedBy'), (d.posted_by_name || '') + ' ' + fmtDateTime(d.posted_at)) : null,
+        d.reverses_document_id ? kv(t('lbl.reversesDoc'), h('a', { href: '#/doc/' + d.reverses_document_id }, '#' + d.reverses_document_id)) : null,
+        d.remark ? kv(t('lbl.remark'), d.remark) : null),
+      table([t('lbl.line'), t('lbl.code'), t('lbl.product'), { label: t('lbl.qty'), num: true }, t('lbl.unit'), { label: t('lbl.rate'), num: true }, { label: t('lbl.qtyPc'), num: true }],
+        d.items.map((i) => h('tr', {}, td(i.line_no), td(i.product_code), td(i.product_name), td(fmtNum(i.qty), true), td(i.unit_code),
+          td(i.conversion_factor, true), td(fmtNum(i.base_qty), true)))),
+      h('div', { class: 'actions' }, act));
+  }
+
+  async function pageNewDoc(type) {
+    if (!myDocTypes().includes(type)) { location.hash = '#/docs'; return; }
+    const V = viewFor();
+    const whs = myTransactWhs();
+    const partyKind = PARTY[type];
+    const parties = await api('/' + (partyKind === 'customer' ? 'customers' : 'suppliers'));
+    const key = uuid();
+    const lines = [{ product: null, unit_code: 'PC', qty: '' }];
+    const state = { warehouse_id: whs[0] && whs[0].warehouse_id, doc_date: today(), doc_no: '', party: '', remark: '' };
+    const body = h('tbody');
+    let busy = false;
+
+    function renderLines() {
+      body.replaceChildren(...lines.map((ln, idx) => {
+        const dl = 'dl' + idx;
+        const unitOpts = ln.product ? [['PC', 'PC'], ...ln.product.conversions.map((c) => [c.unit_code, `${c.unit_code} (×${c.factor_to_base})`])] : [['PC', 'PC']];
+        const search = h('input', { type: 'text', list: dl, placeholder: t('lbl.searchProduct'), value: ln.product ? `${ln.product.product_code} — ${ln.product.name}` : ln.text || '',
+          autocomplete: 'off',
+          oninput: debounce(async (e) => {
+            ln.text = e.target.value;
+            try {
+              const found = await api('/products' + qs({ q: e.target.value.split(' — ')[0], limit: 15 }));
+              ln.options = found;
+              document.getElementById(dl).replaceChildren(...found.map((p) => h('option', { value: `${p.product_code} — ${p.name}` })));
+            } catch (_) { /* ignore while typing */ }
+          }, 250),
+          onchange: async (e) => {
+            const text = e.target.value.trim();
+            let p = (ln.options || []).find((x) => `${x.product_code} — ${x.name}` === text);
+            if (!p && text) {
+              try {
+                const found = await api('/products' + qs({ q: text.split(' — ')[0], limit: 5 }));
+                p = found.find((x) => x.product_code === text || x.barcode === text) || (found.length === 1 ? found[0] : null);
+              } catch (err) { fail(err); }
+            }
+            if (!p) { ln.product = null; toast(t('err.PRODUCT_NOT_FOUND'), 'err'); renderLines(); return; }
+            ln.product = p; ln.unit_code = 'PC'; renderLines();
+            body.querySelectorAll('input.qty')[idx].focus();
+          },
+        });
+        return h('tr', {},
+          td(idx + 1),
+          h('td', {}, search, h('datalist', { id: dl })),
+          h('td', {}, select(unitOpts, ln.unit_code, { onchange: (e) => { ln.unit_code = e.target.value; } })),
+          h('td', { class: 'num' }, h('input', { class: 'qty', type: 'number', min: '0', step: 'any', value: ln.qty, oninput: (e) => { ln.qty = e.target.value; } })),
+          h('td', {}, lines.length > 1 ? h('button', { class: 'link', type: 'button', onclick: () => { lines.splice(idx, 1); renderLines(); } }, '✕') : null));
+      }));
+    }
+
+    async function submit(post) {
+      if (busy) return;
+      const items = [];
+      for (const [i, ln] of lines.entries()) {
+        if (!ln.product) { toast(t('lbl.line') + ' ' + (i + 1) + ': ' + t('err.PRODUCT_NOT_FOUND'), 'err'); return; }
+        if (!(Number(ln.qty) > 0)) { toast(t('lbl.line') + ' ' + (i + 1) + ': ' + t('err.BAD_QTY'), 'err'); return; }
+        items.push({ product_id: ln.product.product_id, unit_code: ln.unit_code, qty: ln.qty });
+      }
+      const payload = {
+        doc_type: type, warehouse_id: Number(state.warehouse_id), doc_date: state.doc_date, doc_no: state.doc_no || null,
+        remark: state.remark || null, items, post,
+        customer_id: partyKind === 'customer' && state.party ? Number(state.party) : null,
+        supplier_id: partyKind === 'supplier' && state.party ? Number(state.party) : null,
+      };
+      busy = true;
+      try {
+        const r = await api('/documents', { method: 'POST', body: payload, headers: { 'Idempotency-Key': key + (post ? '-p' : '-d') } });
+        toast(post ? t('msg.posted') : t('msg.saved'));
+        location.hash = '#/doc/' + r.document_id;
+      } catch (e) { fail(e); } finally { busy = false; }
+    }
+
+    V(h('p', {}, h('a', { href: '#/docs' }, '← ' + t('nav.docs'))),
+      h('h2', {}, t('btn.new') + ' ' + docTypeLabel(type)),
+      h('div', { class: 'card form' },
+        field(t('lbl.warehouse'), select(whOptions(whs), state.warehouse_id, { onchange: (e) => { state.warehouse_id = e.target.value; } })),
+        field(t('lbl.date'), h('input', { type: 'date', value: state.doc_date, onchange: (e) => { state.doc_date = e.target.value; } })),
+        field(t('lbl.docNoAuto'), h('input', { type: 'text', maxlength: 50, oninput: (e) => { state.doc_no = e.target.value; } })),
+        field(partyKind === 'customer' ? t('lbl.customer') : t('lbl.supplier'),
+          select([['', '—'], ...parties.filter((p) => p.is_active).map((p) => [p.id, p.code + ' — ' + p.name])], '', { onchange: (e) => { state.party = e.target.value; } })),
+        field(t('lbl.remark'), h('input', { type: 'text', oninput: (e) => { state.remark = e.target.value; } }), 'wide')),
+      h('div', { class: 'tablewrap' },
+        h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), h('th', {}, t('lbl.unit')), h('th', { class: 'num' }, t('lbl.qty')), h('th', {}))), body)),
+      h('div', { class: 'actions' },
+        h('button', { type: 'button', onclick: () => { lines.push({ product: null, unit_code: 'PC', qty: '' }); renderLines(); } }, '+ ' + t('btn.addLine')),
+        h('span', { class: 'spacer' }),
+        h('button', { type: 'button', onclick: () => submit(false) }, t('btn.saveDraft')),
+        h('button', { type: 'button', class: 'primary', onclick: () => submit(true) }, t('btn.savePost'))));
+    renderLines();
+  }
+
+  // ---------------------------------------------------------------- movements
+  async function pageMovements() {
+    const f = { product_id: '', warehouse_id: '', doc_type: '', date_from: '', date_to: '' };
+    const box = h('div');
+    let pTimer;
+    async function load() {
+      try {
+        const rows = await api('/stock/movements' + qs({ ...f, limit: 300 }));
+        box.replaceChildren(table(
+          [t('lbl.date'), t('lbl.code'), t('lbl.product'), t('lbl.warehouse'), t('lbl.docType'), t('lbl.docNo'),
+           { label: t('lbl.in'), num: true }, { label: t('lbl.out'), num: true }, { label: t('lbl.balance'), num: true }, t('lbl.user')],
+          rows.map((r) => h('tr', { class: r.txn_type === 'REVERSAL' ? 'rev' : '' },
+            td(fmtDate(r.txn_date)), td(r.product_code), td(r.product_name), td(r.warehouse_code),
+            td(hasKey('doc.' + r.doc_type) ? docTypeLabel(r.doc_type) : r.doc_type + (r.txn_type === 'REVERSAL' ? ' (' + t('status.REVERSED') + ')' : '')),
+            td(r.doc_no || ''), td(r.qty_in ? fmtNum(r.qty_in) : '', true), td(r.qty_out ? fmtNum(r.qty_out) : '', true),
+            td(fmtNum(r.balance_after), true), td(r.user_name)))));
+      } catch (e) { fail(e); }
+    }
+    const pInput = h('input', { type: 'search', placeholder: t('lbl.searchProduct'), list: 'mv-products',
+      oninput: (e) => {
+        clearTimeout(pTimer);
+        pTimer = setTimeout(async () => {
+          const text = e.target.value.trim();
+          if (!text) { f.product_id = ''; load(); return; }
+          try {
+            const found = await api('/products' + qs({ q: text.split(' — ')[0], limit: 15, active_only: false }));
+            document.getElementById('mv-products').replaceChildren(...found.map((p) => h('option', { value: `${p.product_code} — ${p.name}` })));
+            const hit = found.find((p) => `${p.product_code} — ${p.name}` === text || p.product_code === text);
+            if (hit) { f.product_id = hit.product_id; load(); }
+          } catch (_) { /* ignore */ }
+        }, 300);
+      } });
+    view(h('h2', {}, t('nav.movements')),
+      h('div', { class: 'filters' },
+        field(t('lbl.product'), h('div', {}, pInput, h('datalist', { id: 'mv-products' }))),
+        field(t('lbl.warehouse'), select(whOptions(S.whs, true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
+        field(t('lbl.docType'), select([['', t('lbl.all')], ...DOC_TYPES.map((x) => [x, docTypeLabel(x)]), ['ADJUST_IN', t('doc.ADJUST_IN')], ['ADJUST_OUT', t('doc.ADJUST_OUT')], ['REVERSAL', t('doc.REVERSAL')]], '', { onchange: (e) => { f.doc_type = e.target.value; load(); } })),
+        field(t('lbl.dateFrom'), h('input', { type: 'date', onchange: (e) => { f.date_from = e.target.value; load(); } })),
+        field(t('lbl.dateTo'), h('input', { type: 'date', onchange: (e) => { f.date_to = e.target.value; load(); } }))),
+      box);
+    load();
+  }
+
+  // ---------------------------------------------------------------- products
+  async function pageProducts() {
+    const f = { q: '', active_only: true };
+    const box = h('div');
+    async function load() {
+      try {
+        const rows = await api('/products' + qs({ ...f, limit: 300, active_only: f.active_only ? 'true' : 'false' }));
+        box.replaceChildren(table(
+          [t('lbl.code'), t('lbl.product'), t('lbl.barcode'), t('lbl.category'), t('lbl.conversions'), { label: t('lbl.reorder'), num: true }, t('lbl.status'), ''],
+          rows.map((p) => h('tr', {},
+            td(p.product_code), td(p.name), td(p.barcode || ''), td(p.category_name || ''),
+            td(p.conversions.map((c) => `1 ${c.unit_code} = ${c.factor_to_base} PC`).join(', ')),
+            td(fmtNum(p.reorder_level), true), td(p.is_active ? t('status.ACTIVE') : t('status.INACTIVE')),
+            h('td', {}, canMaster() ? h('button', { class: 'link', onclick: () => productForm(p) }, t('btn.edit')) : null)))));
+      } catch (e) { fail(e); }
+    }
+    view(h('h2', {}, t('nav.products')),
+      h('div', { class: 'actions' }, canMaster() ? h('button', { class: 'primary', onclick: () => productForm(null) }, '+ ' + t('btn.new')) : null),
+      h('div', { class: 'filters' },
+        field(t('btn.search'), h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) })),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { f.active_only = e.target.checked; load(); } }), t('lbl.activeOnly'))),
+      box, h('div', { id: 'dialog-slot' }));
+    load();
+  }
+
+  function productForm(p) {
+    const convs = ['CT', 'PK'].map((code) => {
+      const ex = p && p.conversions.find((c) => c.unit_code === code);
+      return { code, factor: ex ? ex.factor_to_base : '', barcode: ex && ex.barcode ? ex.barcode : '' };
+    });
+    const v = { product_code: p ? p.product_code : '', name: p ? p.name : '', barcode: p && p.barcode ? p.barcode : '',
+      category_id: p && p.category_id ? p.category_id : '', reorder_level: p ? p.reorder_level : 0, is_active: p ? p.is_active : true };
+    const dlg = h('dialog', {});
+    const close = () => { dlg.close(); dlg.remove(); };
+    dlg.append(h('form', { method: 'dialog', class: 'form', onsubmit: async (e) => {
+      e.preventDefault();
+      const body = { ...v, category_id: v.category_id ? Number(v.category_id) : null, reorder_level: Number(v.reorder_level) || 0,
+        barcode: v.barcode || null,
+        conversions: convs.filter((c) => Number(c.factor) > 0).map((c) => ({ unit_code: c.code, factor_to_base: Number(c.factor), barcode: c.barcode || null })) };
+      try {
+        await api(p ? '/products/' + p.product_id : '/products', { method: p ? 'PUT' : 'POST', body });
+        toast(t('msg.saved')); close(); pageProducts();
+      } catch (err) { fail(err); }
+    } },
+    h('h3', {}, p ? t('btn.edit') : t('btn.new')),
+    field(t('lbl.code'), h('input', { required: true, maxlength: 50, value: v.product_code, oninput: (e) => { v.product_code = e.target.value; } })),
+    field(t('lbl.product'), h('input', { required: true, maxlength: 255, value: v.name, oninput: (e) => { v.name = e.target.value; } })),
+    field(t('lbl.barcode') + ' (PC)', h('input', { value: v.barcode, oninput: (e) => { v.barcode = e.target.value; } })),
+    field(t('lbl.category'), select([['', '—'], ...S.categories.map((c) => [c.category_id, c.name])], v.category_id, { onchange: (e) => { v.category_id = e.target.value; } })),
+    field(t('lbl.reorder') + ' (PC)', h('input', { type: 'number', min: '0', value: v.reorder_level, oninput: (e) => { v.reorder_level = e.target.value; } })),
+    h('fieldset', {}, h('legend', {}, t('lbl.conversions') + ' (1 unit = N PC)'),
+      convs.map((c) => h('div', { class: 'conv-row' }, h('b', {}, c.code),
+        h('input', { type: 'number', min: '1', step: '1', placeholder: 'N PC', value: c.factor, oninput: (e) => { c.factor = e.target.value; } }),
+        h('input', { placeholder: t('lbl.barcode'), value: c.barcode, oninput: (e) => { c.barcode = e.target.value; } })))),
+    p ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: v.is_active, onchange: (e) => { v.is_active = e.target.checked; } }), t('lbl.activeOnly')) : null,
+    h('p', { class: 'hint' }, t('msg.conversionHint')),
+    h('div', { class: 'actions' }, h('button', { type: 'button', onclick: close }, t('btn.cancel')), h('button', { class: 'primary', type: 'submit' }, t('btn.save')))));
+    document.body.append(dlg);
+    dlg.showModal();
+  }
+
+  // ---------------------------------------------------------------- masters (warehouses / customers / suppliers)
+  async function pageMasters(tab = 'warehouses') {
+    const tabs = h('div', { class: 'tabs' }, ['warehouses', 'customers', 'suppliers'].map((x) =>
+      h('a', { href: '#/masters/' + x, class: x === tab ? 'active' : '' }, t('nav.' + x))));
+    const box = h('div');
+    view(h('h2', {}, t('nav.masters')), tabs, box);
+    try {
+      if (tab === 'warehouses') await mastersWarehouses(box); else await mastersParties(box, tab);
+    } catch (e) { fail(e); }
+  }
+
+  async function mastersWarehouses(box) {
+    const rows = await api('/warehouses');
+    const v = { warehouse_code: '', name: '' };
+    box.append(
+      table([t('lbl.code'), t('lbl.name'), t('lbl.status'), ''], rows.map((w) => h('tr', {}, td(w.warehouse_code), td(w.name),
+        td(w.is_active ? t('status.ACTIVE') : t('status.INACTIVE')),
+        h('td', {}, isAdmin() ? h('button', { class: 'link', onclick: async () => {
+          const name = prompt(t('lbl.name'), w.name);
+          if (name === null || !name.trim()) return;
+          try { await api('/warehouses/' + w.warehouse_id, { method: 'PUT', body: { warehouse_code: w.warehouse_code, name: name.trim(), is_active: w.is_active } }); await loadRef(); pageMasters('warehouses'); } catch (e) { fail(e); }
+        } }, t('btn.edit')) : null)))),
+      isAdmin() ? h('form', { class: 'card form', onsubmit: async (e) => {
+        e.preventDefault();
+        try { await api('/warehouses', { method: 'POST', body: v }); toast(t('msg.saved')); await loadRef(); pageMasters('warehouses'); } catch (err) { fail(err); }
+      } },
+      h('h3', {}, t('btn.new') + ' ' + t('nav.warehouses')),
+      field(t('lbl.code'), h('input', { required: true, maxlength: 20, oninput: (e) => { v.warehouse_code = e.target.value; } })),
+      field(t('lbl.name'), h('input', { required: true, oninput: (e) => { v.name = e.target.value; } })),
+      h('button', { class: 'primary', type: 'submit' }, t('btn.save'))) : null);
+  }
+
+  async function mastersParties(box, kind) {
+    const rows = await api('/' + kind);
+    const v = { code: '', name: '', phone: '' };
+    box.append(
+      table([t('lbl.code'), t('lbl.name'), t('lbl.phone'), t('lbl.status')], rows.map((r) => h('tr', {}, td(r.code), td(r.name), td(r.phone || ''), td(r.is_active ? t('status.ACTIVE') : t('status.INACTIVE'))))),
+      h('form', { class: 'card form', onsubmit: async (e) => {
+        e.preventDefault();
+        try { await api('/' + kind, { method: 'POST', body: { ...v, phone: v.phone || null } }); toast(t('msg.saved')); pageMasters(kind); } catch (err) { fail(err); }
+      } },
+      h('h3', {}, t('btn.new') + ' ' + t('nav.' + kind)),
+      field(t('lbl.code'), h('input', { required: true, maxlength: 30, oninput: (e) => { v.code = e.target.value; } })),
+      field(t('lbl.name'), h('input', { required: true, oninput: (e) => { v.name = e.target.value; } })),
+      field(t('lbl.phone'), h('input', { oninput: (e) => { v.phone = e.target.value; } })),
+      h('button', { class: 'primary', type: 'submit' }, t('btn.save'))));
+  }
+
+  // ---------------------------------------------------------------- stock counts
+  async function pageCounts() {
+    const box = h('div');
+    const v = { warehouse_id: myTransactWhs()[0] ? myTransactWhs()[0].warehouse_id : '', product: null, counted_qty: '' };
+    const canCount = ['ADMIN', 'MANAGER', 'STOREKEEPER'].includes(S.me.role_code) && myTransactWhs().length > 0;
+    async function load() {
+      try {
+        const rows = await api('/counts');
+        box.replaceChildren(table(
+          [t('lbl.date'), t('lbl.docNo'), t('lbl.warehouse'), t('lbl.product'), { label: t('lbl.systemQty'), num: true }, { label: t('lbl.countedQty'), num: true }, { label: t('lbl.diff'), num: true }, t('lbl.status'), ''],
+          rows.map((c) => h('tr', {}, td(fmtDate(c.count_date)), td(c.count_no), td(c.warehouse_name), td(c.product_code + ' — ' + c.product_name),
+            td(fmtNum(c.system_qty), true), td(fmtNum(c.counted_qty), true), td(fmtNum(c.counted_qty - c.system_qty), true),
+            td(t('status.' + c.status)),
+            h('td', {}, c.status === 'OPEN' && canCount ? h('button', { class: 'primary small', onclick: async () => {
+              if (!confirm(t('msg.confirmAdjust'))) return;
+              try { const r = await api(`/counts/${c.count_id}/apply`, { method: 'POST', body: {} }); toast(r.no_difference ? t('msg.noDiff') : t('msg.adjusted')); load(); } catch (e) { fail(e); }
+            } }, t('btn.applyCount')) : null)))));
+      } catch (e) { fail(e); }
+    }
+    const search = h('input', { list: 'cnt-products', placeholder: t('lbl.searchProduct'), autocomplete: 'off',
+      oninput: debounce(async (e) => {
+        try {
+          const found = await api('/products' + qs({ q: e.target.value.split(' — ')[0], limit: 15 }));
+          document.getElementById('cnt-products').replaceChildren(...found.map((p) => h('option', { value: `${p.product_code} — ${p.name}` })));
+          v.product = found.find((p) => `${p.product_code} — ${p.name}` === e.target.value || p.product_code === e.target.value) || null;
+        } catch (_) { /* ignore */ }
+      }, 250) });
+    view(h('h2', {}, t('nav.counts')),
+      canCount ? h('form', { class: 'card form', onsubmit: async (e) => {
+        e.preventDefault();
+        if (!v.product) { toast(t('err.PRODUCT_NOT_FOUND'), 'err'); return; }
+        try {
+          await api('/counts', { method: 'POST', body: { warehouse_id: Number(v.warehouse_id), product_id: v.product.product_id, counted_qty: Number(v.counted_qty) } });
+          toast(t('msg.saved')); load();
+        } catch (err) { fail(err); }
+      } },
+      h('h3', {}, t('btn.new')),
+      field(t('lbl.warehouse'), select(whOptions(myTransactWhs()), v.warehouse_id, { onchange: (e) => { v.warehouse_id = e.target.value; } })),
+      field(t('lbl.product'), h('div', {}, search, h('datalist', { id: 'cnt-products' }))),
+      field(t('lbl.countedQty') + ' (PC)', h('input', { type: 'number', min: '0', step: '1', required: true, oninput: (e) => { v.counted_qty = e.target.value; } })),
+      h('button', { class: 'primary', type: 'submit' }, t('btn.save'))) : null,
+      box);
+    load();
+  }
+
+  // ---------------------------------------------------------------- users (admin)
+  async function pageUsers() {
+    if (!isAdmin()) { location.hash = '#/stock'; return; }
+    const box = h('div');
+    const roles = ['ADMIN', 'MANAGER', 'STOREKEEPER', 'SALES', 'VIEWER'];
+    async function load() {
+      try {
+        const rows = await api('/users');
+        box.replaceChildren(table([t('lbl.username'), t('lbl.name'), t('lbl.role'), t('lbl.warehouse'), t('lbl.status'), ''],
+          rows.map((u) => h('tr', {}, td(u.username), td(u.full_name), td(u.role_code),
+            td(u.warehouses.map((a) => { const w = S.whs.find((x) => x.warehouse_id === a.warehouse_id); return (w ? w.warehouse_code : a.warehouse_id) + (a.can_transact ? '✎' : '👁'); }).join(' ')),
+            td(u.is_active ? t('status.ACTIVE') : t('status.INACTIVE')),
+            h('td', {}, h('button', { class: 'link', onclick: () => userForm(u) }, t('btn.edit')))))));
+      } catch (e) { fail(e); }
+    }
+    function userForm(u) {
+      const v = { username: u ? u.username : '', password: '', full_name: u ? u.full_name : '', role_code: u ? u.role_code : 'STOREKEEPER', is_active: u ? u.is_active : true };
+      const access = new Map(S.whs.map((w) => {
+        const a = u && u.warehouses.find((x) => x.warehouse_id === w.warehouse_id);
+        return [w.warehouse_id, { can_view: !!a && a.can_view, can_transact: !!a && a.can_transact, can_approve: !!a && a.can_approve }];
+      }));
+      const dlg = h('dialog', {});
+      const close = () => { dlg.close(); dlg.remove(); };
+      dlg.append(h('form', { class: 'form', method: 'dialog', onsubmit: async (e) => {
+        e.preventDefault();
+        const warehouses = [...access.entries()].filter(([, a]) => a.can_view || a.can_transact).map(([id, a]) => ({ warehouse_id: id, can_view: a.can_view || a.can_transact, can_transact: a.can_transact, can_approve: a.can_approve }));
+        try {
+          if (u) await api('/users/' + u.user_id, { method: 'PUT', body: { full_name: v.full_name, role_code: v.role_code, is_active: v.is_active, password: v.password || null, warehouses } });
+          else await api('/users', { method: 'POST', body: { username: v.username, password: v.password, full_name: v.full_name, role_code: v.role_code, warehouses } });
+          toast(t('msg.saved')); close(); load();
+        } catch (err) { fail(err); }
+      } },
+      h('h3', {}, u ? t('btn.edit') + ' ' + u.username : t('btn.new')),
+      u ? null : field(t('lbl.username'), h('input', { required: true, minlength: 3, oninput: (e) => { v.username = e.target.value; } })),
+      field(t('lbl.password') + (u ? ' (' + t('lbl.leaveBlank') + ')' : ''), h('input', { type: 'password', minlength: 8, required: !u, autocomplete: 'new-password', oninput: (e) => { v.password = e.target.value; } })),
+      field(t('lbl.name'), h('input', { required: true, value: v.full_name, oninput: (e) => { v.full_name = e.target.value; } })),
+      field(t('lbl.role'), select(roles.map((r) => [r, r]), v.role_code, { onchange: (e) => { v.role_code = e.target.value; } })),
+      u ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: v.is_active, onchange: (e) => { v.is_active = e.target.checked; } }), t('status.ACTIVE')) : null,
+      h('fieldset', {}, h('legend', {}, t('lbl.warehouseAccess')),
+        S.whs.map((w) => { const a = access.get(w.warehouse_id); return h('div', { class: 'conv-row' }, h('b', {}, w.warehouse_code),
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: a.can_view, onchange: (e) => { a.can_view = e.target.checked; } }), t('lbl.canView')),
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: a.can_transact, onchange: (e) => { a.can_transact = e.target.checked; } }), t('lbl.canTransact'))); })),
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: close }, t('btn.cancel')), h('button', { class: 'primary', type: 'submit' }, t('btn.save')))));
+      document.body.append(dlg); dlg.showModal();
+    }
+    view(h('h2', {}, t('nav.users')), h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => userForm(null) }, '+ ' + t('btn.new'))), box);
+    load();
+  }
+
+
+  // ---------------------------------------------------------------- Excel import
+  const IMPORT_FIELDS = ['doc_no', 'doc_date', 'product_code', 'barcode', 'qty', 'unit_code', 'customer_code', 'customer_name', 'salesman'];
+  const importTypes = () => (S.me.role_code === 'SALES' ? ['SALE'] : ['SALE', 'WITHDRAWAL', 'RECEIVING']);
+  const defaultImportOpt = (type) => ({
+    match_by: 'PRODUCT_CODE', default_unit: 'PC', default_doc_no: '', default_date: '', doc_type_rules: [],
+    negative_as_return: type === 'SALE', warehouse_by: null, warehouse_map: {}, create_missing_customers: true,
+    duplicate_lines: 'ERROR', date_order: 'DMY',
+  });
+
+  async function downloadErrors(batchId, includeDup) {
+    const res = await fetch(`/api/imports/${batchId}/errors.xlsx${includeDup ? '?include_duplicates=true' : ''}`,
+      { headers: { Authorization: 'Bearer ' + S.token } });
+    if (!res.ok) { toast(t('err.UNKNOWN'), 'err'); return; }
+    const url = URL.createObjectURL(await res.blob());
+    const a = h('a', { href: url, download: `import-${batchId}-errors.xlsx` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  async function pageImport() {
+    if (!canImport()) { location.hash = '#/stock'; return; }
+    const V = viewFor();
+    const templates = await api('/import-templates');
+    const whs = myTransactWhs();
+    const st = {
+      step: 1, wh: whs[0] && whs[0].warehouse_id, type: importTypes()[0], file: null,
+      batch: null, fileName: '', already: null, sheets: [], sheet: null, headerRow: 1, preview: null,
+      mapping: {}, opt: defaultImportOpt(importTypes()[0]), templateId: '', saveAs: '',
+      summary: null, filter: '', rows: [], skipErrors: false, result: null, busy: false,
+    };
+    const root = h('div');
+    V(h('h2', {}, t('nav.import')), root);
+
+    const stepBar = () => h('div', { class: 'tabs' }, ['upload', 'setup', 'preview', 'done'].map((k, i) =>
+      h('a', { class: st.step === i + 1 ? 'active' : '' }, `${i + 1}. ${t('imp.s.' + k)}`)));
+
+    function applyTemplate(tpl) {
+      st.templateId = tpl ? tpl.template_id : '';
+      if (!tpl) return;
+      st.mapping = { ...tpl.mapping };
+      st.opt = { ...defaultImportOpt(st.type), ...(tpl.settings || {}) };
+      st.headerRow = tpl.header_row || 1;
+      if (tpl.sheet_name && st.sheets.includes(tpl.sheet_name)) st.sheet = tpl.sheet_name;
+    }
+
+    async function loadPreview(resetSuggest) {
+      try {
+        const q = qs({ sheet: st.sheet, header_row: st.headerRow });
+        const r = await api(`/imports/${st.batch}/preview${q}`);
+        st.sheet = r.sheet; st.preview = r.preview; st.sheets = r.sheets;
+        if (resetSuggest) { st.headerRow = r.guessed_header_row; st.mapping = { ...r.suggested_mapping };
+          if (r.guessed_header_row !== r.preview.header_row) { return loadPreview(false); } }
+        render();
+      } catch (e) { fail(e); }
+    }
+
+    // ---------------- step 1
+    function step1() {
+      const file = h('input', { type: 'file', accept: '.xlsx,.xls,.csv,.tsv,.txt', onchange: (e) => { st.file = e.target.files[0] || null; } });
+      return h('div', { class: 'card form' },
+        field(t('lbl.warehouse'), select(whOptions(whs), st.wh, { onchange: (e) => { st.wh = Number(e.target.value); } })),
+        field(t('lbl.docType'), select(importTypes().map((x) => [x, docTypeLabel(x)]), st.type, { onchange: (e) => { st.type = e.target.value; st.opt = defaultImportOpt(st.type); } })),
+        field(t('imp.file'), file, 'wide'),
+        h('p', { class: 'hint wide' }, t('imp.fileHint')),
+        h('div', { class: 'actions' }, h('button', { class: 'primary', disabled: st.busy, onclick: async () => {
+          if (!st.file) { toast(t('imp.chooseFile'), 'err'); return; }
+          const form = new FormData();
+          form.append('file', st.file); form.append('warehouse_id', st.wh); form.append('doc_type', st.type);
+          st.busy = true;
+          try {
+            const r = await api('/imports', { method: 'POST', form });
+            st.batch = r.batch_id; st.fileName = r.file_name; st.already = r.already_imported_batch_id;
+            st.sheets = r.sheets; st.sheet = r.sheet; st.preview = r.preview; st.headerRow = r.guessed_header_row;
+            st.mapping = { ...r.suggested_mapping };
+            const tpl = templates.find((x) => x.template_id === r.suggested_template_id);
+            if (tpl) { applyTemplate(tpl); if (tpl.header_row !== r.preview.header_row || (tpl.sheet_name && tpl.sheet_name !== r.sheet)) await loadPreview(false); }
+            st.busy = false; st.step = 2; render();
+          } catch (e) { fail(e); } finally { st.busy = false; }
+        } }, t('btn.upload'))));
+    }
+
+    // ---------------- step 2
+    function previewTable() {
+      const p = st.preview;
+      if (!p) return null;
+      const width = Math.min(Math.max(...p.rows.map((r) => r.length), 1), 12);
+      return h('div', { class: 'tablewrap' }, h('table', { class: 'mini' }, h('tbody', {}, p.rows.map((r, i) =>
+        h('tr', { class: i + 1 === st.headerRow ? 'hdr' : '', onclick: () => { st.headerRow = i + 1; loadPreview(false); } },
+          h('td', { class: 'num rn' }, i + 1),
+          Array.from({ length: width }, (_, c) => h('td', {}, r[c] == null ? '' : String(r[c]).slice(0, 40))))))));
+    }
+
+    function mappingGrid() {
+      const headers = (st.preview && st.preview.headers) || [];
+      const needsProduct = st.opt.match_by === 'BARCODE' ? ['barcode'] : st.opt.match_by === 'BOTH' ? ['product_code', 'barcode'] : ['product_code'];
+      const required = new Set(['qty', needsProduct[0], ...(st.opt.default_doc_no ? [] : ['doc_no'])]);
+      return h('div', { class: 'maprows' }, IMPORT_FIELDS.map((f) => h('label', { class: 'field' },
+        h('span', {}, t('imp.f.' + f) + (required.has(f) ? ' *' : '')),
+        select([['', t('imp.notMapped')], ...headers.map((x) => [x, x])], st.mapping[f] || '',
+          { onchange: (e) => { if (e.target.value) st.mapping[f] = e.target.value; else delete st.mapping[f]; } }))));
+    }
+
+    function optionsPanel() {
+      const o = st.opt;
+      const rule = (r, i) => h('div', { class: 'conv-row' },
+        h('input', { placeholder: t('imp.opt.prefix'), value: r.prefix, oninput: (e) => { r.prefix = e.target.value; } }),
+        select(['CUSTOMER_RETURN', 'SALE', 'WITHDRAWAL', 'RECEIVING', 'SUPPLIER_RETURN'].map((x) => [x, docTypeLabel(x)]), r.doc_type, { onchange: (e) => { r.doc_type = e.target.value; } }),
+        h('button', { class: 'link', type: 'button', onclick: () => { o.doc_type_rules.splice(i, 1); render(); } }, '✕'));
+      return h('div', { class: 'card form' },
+        field(t('imp.opt.matchBy'), select([['PRODUCT_CODE', t('imp.opt.matchCode')], ['BARCODE', t('imp.opt.matchBarcode')], ['BOTH', t('imp.opt.matchBoth')]], o.match_by, { onchange: (e) => { o.match_by = e.target.value; render(); } })),
+        field(t('imp.opt.defaultUnit'), select(S.units.map((u) => [u.unit_code, u.unit_code]), o.default_unit, { onchange: (e) => { o.default_unit = e.target.value; } })),
+        field(t('imp.opt.defaultDocNo'), h('input', { value: o.default_doc_no || '', maxlength: 50, oninput: (e) => { o.default_doc_no = e.target.value; }, onchange: () => render() })),
+        field(t('imp.opt.defaultDate'), h('input', { type: 'date', value: o.default_date || '', onchange: (e) => { o.default_date = e.target.value; } })),
+        field(t('imp.opt.dupLines'), select([['ERROR', t('imp.opt.dupError')], ['KEEP', t('imp.opt.dupKeep')]], o.duplicate_lines, { onchange: (e) => { o.duplicate_lines = e.target.value; } })),
+        field(t('imp.opt.dateOrder'), select([['DMY', 'DD/MM/YYYY'], ['MDY', 'MM/DD/YYYY']], o.date_order, { onchange: (e) => { o.date_order = e.target.value; } })),
+        st.type === 'SALE' ? h('label', { class: 'check wide' }, h('input', { type: 'checkbox', checked: o.negative_as_return, onchange: (e) => { o.negative_as_return = e.target.checked; } }), t('imp.opt.negReturn')) : null,
+        st.type === 'SALE' ? h('label', { class: 'check wide' }, h('input', { type: 'checkbox', checked: o.create_missing_customers, onchange: (e) => { o.create_missing_customers = e.target.checked; } }), t('imp.opt.createCustomers')) : null,
+        st.type === 'SALE' ? h('fieldset', { class: 'wide' }, h('legend', {}, t('imp.opt.rules')),
+          o.doc_type_rules.map(rule),
+          h('button', { type: 'button', onclick: () => { o.doc_type_rules.push({ prefix: '', doc_type: 'CUSTOMER_RETURN' }); render(); } }, '+ ' + t('imp.opt.addRule')),
+          h('p', { class: 'hint' }, t('imp.opt.rulesHint'))) : null);
+    }
+
+    function step2() {
+      const tplSel = select([['', t('imp.templateNone')], ...templates.filter((x) => x.doc_type === st.type).map((x) => [x.template_id, x.name])], st.templateId,
+        { onchange: async (e) => {
+          const tpl = templates.find((x) => String(x.template_id) === e.target.value);
+          if (tpl) { applyTemplate(tpl); await loadPreview(false); } else { st.templateId = ''; render(); }
+        } });
+      return h('div', {},
+        h('p', {}, h('b', {}, st.fileName), ` · ${(whs.find((w) => w.warehouse_id === st.wh) || {}).warehouse_code || ''} · ${docTypeLabel(st.type)}`),
+        st.already ? h('p', { class: 'banner warn' }, t('imp.alreadyImported', { id: st.already })) : null,
+        h('div', { class: 'filters' },
+          st.sheets.length > 1 ? field(t('imp.sheet'), select(st.sheets.map((x) => [x, x]), st.sheet, { onchange: async (e) => { st.sheet = e.target.value; await loadPreview(true); } })) : null,
+          field(t('imp.headerRow'), h('input', { type: 'number', min: '1', value: st.headerRow, onchange: (e) => { st.headerRow = Math.max(1, Number(e.target.value) || 1); loadPreview(false); } })),
+          field(t('imp.template'), tplSel)),
+        h('p', { class: 'hint' }, t('imp.previewHint')), previewTable(),
+        h('h3', {}, t('imp.mapping')), h('p', { class: 'hint' }, t('imp.mapHint')), mappingGrid(),
+        h('h3', {}, t('imp.options')), optionsPanel(),
+        h('div', { class: 'card form' }, field(t('imp.saveTemplate'), h('input', { value: st.saveAs, maxlength: 150, oninput: (e) => { st.saveAs = e.target.value; } }), 'wide')),
+        h('div', { class: 'actions' },
+          h('button', { onclick: async () => { try { await api(`/imports/${st.batch}/cancel`, { method: 'POST' }); } catch (_) { /* ignore */ } location.hash = '#/imports'; } }, t('btn.cancelImport')),
+          h('span', { class: 'spacer' }),
+          h('button', { class: 'primary', disabled: st.busy, onclick: () => validate() }, t('btn.validate'))));
+    }
+
+    async function validate() {
+      const opt = { ...st.opt, doc_type_rules: st.opt.doc_type_rules.filter((r) => r.prefix.trim()) };
+      st.busy = true;
+      try {
+        const r = await api(`/imports/${st.batch}/process`, { method: 'POST', body: {
+          sheet: st.sheet, header_row: st.headerRow, mapping: st.mapping, options: opt,
+          template_id: st.templateId ? Number(st.templateId) : null, save_template_as: st.saveAs.trim() || null } });
+        st.summary = r.summary; st.saveAs = '';
+        if (r.template_id) { const fresh = await api('/import-templates'); templates.splice(0, templates.length, ...fresh); st.templateId = String(r.template_id); }
+        st.filter = r.summary.rows.error + r.summary.rows.blocked > 0 ? 'ERROR' : '';
+        await loadRows();
+        st.busy = false; st.step = 3; render();
+      } catch (e) { fail(e); } finally { st.busy = false; }
+    }
+
+    async function loadRows() {
+      st.rows = await api(`/imports/${st.batch}/rows${qs({ status: st.filter, limit: 200 })}`);
+    }
+
+    // ---------------- step 3
+    const card = (label, value, cls) => h('div', { class: 'stat ' + (cls || '') }, h('b', {}, fmtNum(value)), h('span', {}, label));
+
+    function step3() {
+      const s = st.summary;
+      const bad = s.rows.error + s.rows.blocked;
+      const salesmen = Object.keys(s.salesmen || {});
+      const mapPanel = st.mapping.salesman && salesmen.length > 1 ? h('div', { class: 'card' },
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.opt.warehouse_by === 'salesman', onchange: (e) => { st.opt.warehouse_by = e.target.checked ? 'salesman' : null; render(); } }), t('imp.opt.warehouseBySalesman')),
+        st.opt.warehouse_by === 'salesman' ? h('div', {},
+          h('p', { class: 'hint' }, t('imp.opt.salesmanMapHint')),
+          h('div', { class: 'maprows' }, salesmen.map((sm) => h('label', { class: 'field' }, h('span', {}, `${sm} (${fmtNum(s.salesmen[sm])})`),
+            select([['', t('imp.opt.defaultWh')], ...whOptions(whs)], st.opt.warehouse_map[sm] || '', { onchange: (e) => { if (e.target.value) st.opt.warehouse_map[sm] = Number(e.target.value); else delete st.opt.warehouse_map[sm]; } })))),
+          h('div', { class: 'actions' }, h('button', { onclick: () => validate() }, t('btn.revalidate')))) : null) : null;
+      const shortList = s.shortage_count ? h('p', { class: 'banner warn' }, `${t('imp.sum.shortages')}: ${fmtNum(s.shortage_count)}`) : null;
+      return h('div', {},
+        h('p', { class: 'banner ok' }, t('imp.sum.noStockMove')),
+        st.already ? h('p', { class: 'banner warn' }, t('imp.alreadyImported', { id: st.already })) : null,
+        h('div', { class: 'stats' },
+          card(t('imp.sum.rows'), s.rows.total), card(t('imp.sum.valid'), s.rows.valid, 'good'),
+          card(t('imp.sum.error'), s.rows.error, s.rows.error ? 'bad' : ''), card(t('imp.sum.blocked'), s.rows.blocked, s.rows.blocked ? 'bad' : ''),
+          card(t('imp.sum.duplicate'), s.rows.duplicate, s.rows.duplicate ? 'warn' : '')),
+        h('div', { class: 'stats' },
+          card(t('imp.sum.docsReady'), s.docs.ready, 'good'), card(t('imp.sum.docsBlocked'), s.docs.blocked, s.docs.blocked ? 'bad' : ''),
+          card(t('imp.sum.docsDup'), s.docs.duplicate, s.docs.duplicate ? 'warn' : ''),
+          card(t('imp.sum.qtyOut'), s.qty_out), card(t('imp.sum.qtyIn'), s.qty_in), card(t('imp.sum.newCustomers'), s.new_customers)),
+        Object.keys(s.docs.by_type || {}).length ? h('p', {}, Object.entries(s.docs.by_type).map(([k, v]) => `${docTypeLabel(k)}: ${fmtNum(v)}`).join(' · ')) : null,
+        shortList, mapPanel,
+        Object.keys(s.error_codes || {}).length ? h('p', {}, Object.entries(s.error_codes).map(([k, v]) => `${t('imp.err.' + k)}: ${fmtNum(v)}`).join(' · ')) : null,
+        h('div', { class: 'filters' },
+          field(t('lbl.status'), select([['', t('lbl.all')], ...['ERROR', 'BLOCKED', 'DUPLICATE', 'VALID'].map((x) => [x, t('imp.st.' + x)])], st.filter,
+            { onchange: async (e) => { st.filter = e.target.value; await loadRows(); render(); } })),
+          bad ? h('button', { onclick: () => downloadErrors(st.batch, false) }, t('btn.exportErrors')) : null),
+        table([t('imp.col.row'), t('lbl.status'), t('imp.col.error'), t('lbl.docNo'), t('lbl.date'), t('lbl.docType'), t('lbl.warehouse'), t('lbl.product'), { label: t('lbl.qty'), num: true }, t('lbl.unit')],
+          st.rows.map((r) => h('tr', { class: r.status === 'ERROR' ? 'low' : (r.status === 'BLOCKED' ? 'rev' : '') },
+            td(r.row_no), td(t('imp.st.' + r.status)),
+            td(r.error_code ? (t('imp.err.' + r.error_code) + (r.error_detail && r.error_code !== 'DOC_HAS_ERRORS' ? ' — ' + r.error_detail : '')) : ''),
+            td(r.doc_no || ''), td(fmtDate(r.doc_date)), td(r.doc_type ? docTypeLabel(r.doc_type) : ''), td(r.warehouse_code || ''),
+            td(r.product_ref || ''), td(r.qty == null ? '' : fmtNum(r.qty), true), td(r.unit_code || '')))),
+        s.rows.total > 200 ? h('p', { class: 'hint' }, t('imp.rowsLimit')) : null,
+        bad ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.skipErrors, onchange: (e) => { st.skipErrors = e.target.checked; render(); } }), t('imp.skipErrors')) : null,
+        h('div', { class: 'actions' },
+          h('button', { onclick: () => { st.step = 2; render(); } }, '← ' + t('btn.back')),
+          h('span', { class: 'spacer' }),
+          h('button', { class: 'primary', disabled: st.busy || s.docs.ready === 0 || (bad > 0 && !st.skipErrors), onclick: async () => {
+            if (!confirm(t('imp.confirmQ', { n: s.docs.ready }))) return;
+            st.busy = true;
+            try {
+              const r = await api(`/imports/${st.batch}/confirm`, { method: 'POST', body: { skip_errors: st.skipErrors }, headers: { 'Idempotency-Key': `imp-${st.batch}-${st.skipErrors ? 's' : 'a'}` } });
+              st.result = r.result; st.busy = false; st.step = 4; render();
+            } catch (e) { fail(e); } finally { st.busy = false; }
+          } }, t('btn.confirmImport'))));
+    }
+
+    // ---------------- step 4
+    function step4() {
+      const r = st.result || {};
+      return h('div', { class: 'card' },
+        h('p', { class: 'banner ok' }, t('imp.done')),
+        h('div', { class: 'stats' }, card(t('imp.postedDocs'), r.documents_posted || 0, 'good'), card(t('imp.sum.rows'), r.rows_posted || 0),
+          card(t('imp.rowsSkipped'), r.rows_skipped || 0, r.rows_skipped ? 'warn' : ''), card(t('imp.customersCreated'), r.customers_created || 0)),
+        h('div', { class: 'actions' },
+          h('a', { class: 'btn', href: '#/docs' }, t('nav.docs')), h('a', { class: 'btn', href: '#/stock' }, t('nav.stock')),
+          h('a', { class: 'btn', href: '#/imports' }, t('nav.imports')), h('button', { onclick: () => pageImport() }, t('imp.another'))));
+    }
+
+    function render() {
+      if (main() !== V.el) return;
+      root.replaceChildren(stepBar(), [step1, step2, step3, step4][st.step - 1]());
+    }
+    render();
+  }
+
+  async function pageImports() {
+    const V = viewFor();
+    const rows = await api('/imports?limit=100');
+    V(h('h2', {}, t('nav.imports')),
+      h('div', { class: 'actions' }, h('a', { class: 'btn primary', href: '#/import' }, '+ ' + t('nav.import'))),
+      table([t('imp.col.id'), t('lbl.date'), t('imp.file'), t('lbl.docType'), t('lbl.warehouse'), t('lbl.status'), { label: t('imp.sum.rows'), num: true },
+        { label: t('imp.sum.error'), num: true }, { label: t('imp.sum.duplicate'), num: true }, { label: t('imp.postedDocs'), num: true }, t('lbl.createdBy'), ''],
+      rows.map((b) => h('tr', {}, td('#' + b.batch_id), td(fmtDateTime(b.uploaded_at)), td(b.file_name), td(docTypeLabel(b.doc_type)), td(b.warehouse_code),
+        td(t('imp.bst.' + b.status)), td(fmtNum(b.total_rows), true), td(fmtNum(b.error_rows), true), td(fmtNum(b.duplicate_rows), true),
+        td(b.documents_posted == null ? '' : fmtNum(b.documents_posted), true), td(b.uploaded_by_name),
+        h('td', {}, b.error_rows > 0 && b.status !== 'CANCELLED' ? h('button', { class: 'link', onclick: () => downloadErrors(b.batch_id, false) }, t('btn.exportErrors')) : null)))));
+  }
+
+
+  // ---------------------------------------------------------------- transfers
+  const TST = ['DRAFT', 'IN_TRANSIT', 'PARTIAL', 'COMPLETED', 'CANCELLED'];
+
+  async function pageTransfers() {
+    const V = viewFor();
+    const f = { status: '' };
+    const box = h('div');
+    async function load() {
+      const rows = await api('/transfers' + qs({ status: f.status, limit: 100 }));
+      box.replaceChildren(table([t('tf.no'), t('lbl.date'), t('tf.mode'), t('tf.from'), t('tf.to'), t('lbl.status'), { label: t('tf.sent'), num: true }, { label: t('tf.received'), num: true }],
+        rows.map((r) => h('tr', { class: 'click', onclick: () => { location.hash = '#/transfer/' + r.transfer_id; } },
+          td(r.transfer_no), td(fmtDate(r.transfer_date)), td(t('tf.mode.' + r.transfer_mode)), td(r.from_code), td(r.to_code),
+          h('td', {}, statusBadge(r.status)), td(fmtNum(r.qty_sent), true), td(fmtNum(r.qty_received), true)))));
+    }
+    V(h('h2', {}, t('nav.transfers')),
+      h('div', { class: 'filters' },
+        field(t('lbl.status'), select([['', t('lbl.all')], ...TST.map((x) => [x, t('status.' + x)])], '', { onchange: (e) => { f.status = e.target.value; load().catch(fail); } })),
+        canTransfer() ? h('a', { class: 'btn primary', href: '#/transfer-new' }, '+ ' + t('tf.new')) : null),
+      box);
+    await load();
+  }
+
+  async function pageNewTransfer() {
+    if (!canTransfer()) { location.hash = '#/transfers'; return; }
+    const V = viewFor();
+    const from = myTransactWhs();
+    const key = uuid();
+    const lines = [{ product: null, unit_code: 'PC', qty: '' }];
+    const st = { mode: 'APPROVAL', from: from[0] && from[0].warehouse_id, to: '', date: today(), remark: '' };
+    const body = h('tbody');
+    let busy = false;
+    function renderLines() {
+      body.replaceChildren(...lines.map((ln, idx) => {
+        const dl = 'tdl' + idx;
+        const unitOpts = ln.product ? [['PC', 'PC'], ...ln.product.conversions.map((c) => [c.unit_code, `${c.unit_code} (×${c.factor_to_base})`])] : [['PC', 'PC']];
+        const search = h('input', { type: 'text', list: dl, placeholder: t('lbl.searchProduct'), autocomplete: 'off',
+          value: ln.product ? `${ln.product.product_code} — ${ln.product.name}` : ln.text || '',
+          oninput: debounce(async (e) => {
+            ln.text = e.target.value;
+            try {
+              const found = await api('/products' + qs({ q: e.target.value.split(' — ')[0], limit: 15 }));
+              ln.options = found;
+              document.getElementById(dl).replaceChildren(...found.map((p) => h('option', { value: `${p.product_code} — ${p.name}` })));
+            } catch (_) { /* ignore while typing */ }
+          }, 250),
+          onchange: async (e) => {
+            const text = e.target.value.trim();
+            let p = (ln.options || []).find((x) => `${x.product_code} — ${x.name}` === text);
+            if (!p && text) {
+              try {
+                const found = await api('/products' + qs({ q: text.split(' — ')[0], limit: 5 }));
+                p = found.find((x) => x.product_code === text || x.barcode === text) || (found.length === 1 ? found[0] : null);
+              } catch (err) { fail(err); }
+            }
+            if (!p) { ln.product = null; toast(t('err.PRODUCT_NOT_FOUND'), 'err'); renderLines(); return; }
+            ln.product = p; ln.unit_code = 'PC'; renderLines();
+            body.querySelectorAll('input.qty')[idx].focus();
+          } });
+        return h('tr', {}, td(idx + 1), h('td', {}, search, h('datalist', { id: dl })),
+          h('td', {}, select(unitOpts, ln.unit_code, { onchange: (e) => { ln.unit_code = e.target.value; } })),
+          h('td', { class: 'num' }, h('input', { class: 'qty', type: 'number', min: '1', step: '1', value: ln.qty, oninput: (e) => { ln.qty = e.target.value; } })),
+          h('td', {}, lines.length > 1 ? h('button', { class: 'link', type: 'button', onclick: () => { lines.splice(idx, 1); renderLines(); } }, '✕') : null));
+      }));
+    }
+    async function submit() {
+      if (busy) return;
+      if (!st.to) { toast(t('tf.chooseTo'), 'err'); return; }
+      const items = [];
+      for (const [i, ln] of lines.entries()) {
+        if (!ln.product) { toast(t('lbl.line') + ' ' + (i + 1) + ': ' + t('err.PRODUCT_NOT_FOUND'), 'err'); return; }
+        if (!(Number(ln.qty) > 0) || !Number.isInteger(Number(ln.qty))) { toast(t('lbl.line') + ' ' + (i + 1) + ': ' + t('err.BAD_QTY'), 'err'); return; }
+        items.push({ product_id: ln.product.product_id, unit_code: ln.unit_code, qty: Number(ln.qty) });
+      }
+      busy = true;
+      try {
+        const r = await api('/transfers', { method: 'POST', headers: { 'Idempotency-Key': key }, body: {
+          mode: st.mode, from_warehouse_id: Number(st.from), to_warehouse_id: Number(st.to), transfer_date: st.date, remark: st.remark || null, items } });
+        toast(t('tf.created')); location.hash = '#/transfer/' + r.transfer_id;
+      } catch (e) { fail(e); } finally { busy = false; }
+    }
+    renderLines();
+    const toOpts = () => S.whs.filter((w) => w.warehouse_type === 'PHYSICAL' && w.is_active && String(w.warehouse_id) !== String(st.from));
+    const toSel = select([['', '—'], ...whOptions(toOpts())], '', { onchange: (e) => { st.to = e.target.value; } });
+    V(h('p', {}, h('a', { href: '#/transfers' }, '← ' + t('nav.transfers'))), h('h2', {}, t('tf.new')),
+      h('div', { class: 'card form' },
+        field(t('tf.mode'), select([['APPROVAL', t('tf.mode.APPROVAL')], ['INSTANT', t('tf.mode.INSTANT')]], st.mode, { onchange: (e) => { st.mode = e.target.value; } })),
+        field(t('tf.from'), select(whOptions(from), st.from, { onchange: (e) => { st.from = e.target.value; toSel.replaceChildren(...[['', '—'], ...whOptions(toOpts())].map(([v, l]) => h('option', { value: v }, l))); st.to = ''; } })),
+        field(t('tf.to'), toSel),
+        field(t('lbl.date'), h('input', { type: 'date', value: st.date, onchange: (e) => { st.date = e.target.value; } })),
+        field(t('lbl.remark'), h('input', { value: '', oninput: (e) => { st.remark = e.target.value; } }), 'wide'),
+        h('p', { class: 'hint wide' }, t('tf.modeHint'))),
+      h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, [t('lbl.line'), t('lbl.product'), t('lbl.unit'), { label: t('lbl.qty'), num: true }, ''].map((x) => h('th', { class: x.num ? 'num' : '' }, x.label || x)))), body)),
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { lines.push({ product: null, unit_code: 'PC', qty: '' }); renderLines(); } }, '+ ' + t('btn.addLine')),
+        h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: submit }, t('btn.save'))));
+  }
+
+  async function pageTransfer(id) {
+    const V = viewFor();
+    let d;
+    try { d = await api('/transfers/' + id); } catch (e) { fail(e); if (main() === V.el) location.hash = '#/transfers'; return; }
+    const canSrc = S.me.transact_warehouses.includes(d.from_warehouse_id);
+    const canDst = S.me.transact_warehouses.includes(d.to_warehouse_id);
+    const mgr = isManager();
+    const reload = () => pageTransfer(id);
+    const call = async (path, body, okMsg) => {
+      try { await api(`/transfers/${id}/${path}`, { method: 'POST', body: body || {}, headers: { 'Idempotency-Key': `tf-${id}-${path}-${uuid()}` } }); toast(okMsg); reload(); } catch (e) { fail(e); }
+    };
+    const act = [];
+    if (d.status === 'DRAFT' && mgr && canSrc) act.push(h('button', { class: 'primary', onclick: () => { if (confirm(t('tf.confirmShip'))) call('ship', null, t('tf.shipped')); } }, t('tf.ship')));
+    const recv = {};
+    const open = d.status === 'IN_TRANSIT' || d.status === 'PARTIAL';
+    if (open && canDst && ['ADMIN', 'MANAGER', 'STOREKEEPER'].includes(S.me.role_code)) {
+      act.push(h('button', { class: 'primary', onclick: () => {
+        const lines = d.items.filter((i) => Number(recv[i.item_id] ?? i.qty_outstanding_base) > 0 && i.qty_outstanding_base > 0)
+          .map((i) => ({ product_id: i.product_id, unit_code: 'PC', qty: Number(recv[i.item_id] ?? i.qty_outstanding_base) }));
+        call('receive', { lines }, t('tf.receivedOk'));
+      } }, t('tf.receiveEntered')));
+      act.push(h('button', { onclick: () => call('receive', {}, t('tf.receivedOk')) }, t('tf.receiveAll')));
+    }
+    const cancelOk = (d.status === 'DRAFT' && (mgr || d.created_by === S.me.user_id) && canSrc) || (open && mgr && canSrc);
+    if (cancelOk) act.push(h('button', { class: 'danger', onclick: () => {
+      const reason = prompt(open ? t('tf.cancelReasonOpen') : t('tf.cancelReason'));
+      if (reason !== null) call('cancel', { reason: reason || null }, t('tf.cancelled'));
+    } }, t('btn.cancel')));
+    const kv = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('b', {}, v ?? ''));
+    V(h('p', {}, h('a', { href: '#/transfers' }, '← ' + t('nav.transfers'))),
+      h('h2', {}, `${t('tf.transfer')} ${d.transfer_no} `, statusBadge(d.status)),
+      h('div', { class: 'card grid' }, kv(t('tf.mode'), t('tf.mode.' + d.transfer_mode)), kv(t('tf.from'), `${d.from_code} — ${d.from_name}`),
+        kv(t('tf.to'), `${d.to_code} — ${d.to_name}`), kv(t('lbl.date'), fmtDate(d.transfer_date)), kv(t('lbl.createdBy'), d.created_by_name), kv(t('lbl.remark'), d.remark)),
+      open ? h('p', { class: 'banner warn' }, t('tf.inTransitHint')) : null,
+      table([t('lbl.product'), t('lbl.unit'), { label: t('tf.sent') + ' (PC)', num: true }, { label: t('tf.received') + ' (PC)', num: true },
+        { label: t('tf.returned') + ' (PC)', num: true }, { label: t('tf.outstanding') + ' (PC)', num: true }, open ? t('tf.receiveNow') : ''],
+      d.items.map((i) => h('tr', {}, td(`${i.product_code} — ${i.product_name}`), td(`${i.unit_code} (×${i.conversion_factor})`), td(fmtNum(i.qty_sent_base), true),
+        td(fmtNum(i.qty_received_base), true), td(fmtNum(i.qty_cancelled_base), true), td(fmtNum(i.qty_outstanding_base), true),
+        open ? h('td', { class: 'num' }, i.qty_outstanding_base > 0 ? h('input', { class: 'qty', type: 'number', min: '0', max: i.qty_outstanding_base, step: '1', value: i.qty_outstanding_base,
+          oninput: (e) => { recv[i.item_id] = e.target.value; } }) : '') : null))),
+      h('div', { class: 'actions' }, act));
+  }
+
+  // ---------------------------------------------------------------- router
+  function route() {
+    if (!S.me) return;
+    const parts = location.hash.replace(/^#\/?/, '').split('/');
+    const [page, arg] = [parts[0] || 'stock', parts[1]];
+    renderShell();
+    const run = {
+      stock: pageStock, docs: pageDocs, doc: () => pageDoc(Number(arg)), new: () => pageNewDoc(arg),
+      import: pageImport, imports: pageImports,
+      transfers: pageTransfers, 'transfer-new': pageNewTransfer, transfer: () => pageTransfer(Number(arg)),
+      movements: pageMovements, products: pageProducts, counts: pageCounts, masters: () => pageMasters(arg || 'warehouses'), users: pageUsers,
+    }[page] || pageStock;
+    Promise.resolve(run()).catch(fail);
+  }
+
+  async function boot() {
+    document.documentElement.lang = S.lang;
+    document.title = t('app.title');
+    if (!S.token) { renderShell(); return; }
+    try {
+      S.me = await api('/me');
+      await loadRef();
+      if (!location.hash) location.hash = '#/stock';
+      route();
+    } catch (e) {
+      if (e.status !== 401) fail(e);
+      S.me = null; renderShell();
+    }
+  }
+
+  window.addEventListener('hashchange', route);
+  boot();
+})();
