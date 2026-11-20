@@ -76,12 +76,12 @@ PREFIX = {
 # ---------------------------------------------------------------- helpers
 
 
-def audit(cur, user_id, action, entity_type, entity_id, warehouse_id=None, old=None, new=None):
+def audit(cur, user_id, action, entity_type, entity_id, warehouse_id=None, old=None, new=None, ip=None):
     cur.execute(
-        """INSERT INTO audit_logs (user_id, action, entity_type, entity_id, warehouse_id, old_data, new_data)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+        """INSERT INTO audit_logs (user_id, action, entity_type, entity_id, warehouse_id, old_data, new_data, ip_address)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
         (user_id, action, entity_type, str(entity_id), warehouse_id,
-         Jsonb(old) if old is not None else None, Jsonb(new) if new is not None else None),
+         Jsonb(old) if old is not None else None, Jsonb(new) if new is not None else None, ip),
     )
 
 

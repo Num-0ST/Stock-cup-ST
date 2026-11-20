@@ -1,5 +1,8 @@
 FROM python:3.13-slim
 WORKDIR /srv
+# fonts for PDF export (Latin + Thai + Lao)
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-tlwg-loma-ttf fonts-lao \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app

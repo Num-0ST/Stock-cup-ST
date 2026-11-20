@@ -25,6 +25,9 @@ CREATE TABLE users (
     role_id        SMALLINT     NOT NULL REFERENCES roles(role_id),
     is_active      BOOLEAN      NOT NULL DEFAULT TRUE,
     last_login_at  TIMESTAMPTZ,
+    failed_logins  INT          NOT NULL DEFAULT 0,      -- consecutive failures (account lockout)
+    locked_until   TIMESTAMPTZ,
+    password_changed_at TIMESTAMPTZ,                    -- tokens issued before this are rejected
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 

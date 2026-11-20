@@ -157,20 +157,21 @@
     const app = document.getElementById('app');
     if (!S.token || !S.me) { app.replaceChildren(loginView()); return; }
     const links = [
-      ['#/stock', 'nav.stock'], ['#/docs', 'nav.docs'], ['#/movements', 'nav.movements'],
+      ['#/dashboard', 'nav.dashboard'], ['#/stock', 'nav.stock'], ['#/docs', 'nav.docs'], ['#/movements', 'nav.movements'],
       ['#/products', 'nav.products'], ['#/counts', 'nav.counts'], ['#/masters', 'nav.masters'],
     ];
-    links.splice(3, 0, ['#/transfers', 'nav.transfers']);
-    if (canImport()) links.splice(3, 0, ['#/import', 'nav.import'], ['#/imports', 'nav.imports']);
+    links.splice(4, 0, ['#/transfers', 'nav.transfers']);
+    if (canImport()) links.splice(4, 0, ['#/import', 'nav.import'], ['#/imports', 'nav.imports']);
+    links.push(['#/reports', 'nav.reports']);
     if (isAdmin()) links.push(['#/users', 'nav.users']);
-    const cur = location.hash.split('/')[1] || 'stock';
+    const cur = location.hash.split('/')[1] || 'dashboard';
     app.replaceChildren(
       h('header', { class: 'top' },
         h('div', { class: 'brand' }, t('app.title')),
         h('nav', {}, links.map(([href, key]) => h('a', { href, class: href.split('/')[1] === cur ? 'active' : '' }, t(key)))),
         h('div', { class: 'right' },
           langSelect(),
-          h('span', { class: 'who' }, S.me.full_name + ' · ' + S.me.role_code),
+          h('a', { class: 'who', href: '#/account', title: t('nav.account') }, S.me.full_name + ' · ' + S.me.role_code),
           h('button', { class: 'link', onclick: logout }, t('btn.logout')))),
       h('main', { id: 'main' }));
   }
@@ -1040,18 +1041,195 @@
       h('div', { class: 'actions' }, act));
   }
 
+
+  // ---------------------------------------------------------------- dashboard
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs, ...kids) {
+    const el = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+    for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return el;
+  }
+
+  /** Grouped bar chart. series = [{name, cls, values[]}], labels = x labels. Negative values are drawn below the axis. */
+  function barChart(labels, series, height = 190) {
+    const W = 720, padL = 46, padR = 8, padT = 10, padB = 24, H = height;
+    const all = series.flatMap((s) => s.values);
+    const max = Math.max(0, ...all), min = Math.min(0, ...all);
+    const span = (max - min) || 1;
+    const y = (v) => padT + (H - padT - padB) * (1 - (v - min) / span);
+    const n = labels.length, gw = (W - padL - padR) / n, bw = Math.max(1, Math.min(18, (gw - 2) / series.length));
+    const nice = (v) => (Math.abs(v) >= 1000 ? Math.round(v / 100) / 10 + 'k' : String(Math.round(v)));
+    const g = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', preserveAspectRatio: 'none' });
+    [min, (max + min) / 2, max].forEach((v) => g.append(svgEl('line', { x1: padL, x2: W - padR, y1: y(v), y2: y(v), class: 'grid' }), svgEl('text', { x: padL - 4, y: y(v) + 3, class: 'tick', 'text-anchor': 'end' }, nice(v))));
+    g.append(svgEl('line', { x1: padL, x2: W - padR, y1: y(0), y2: y(0), class: 'axis' }));
+    const step = Math.max(1, Math.ceil(n / 8));
+    labels.forEach((lb, i) => {
+      const x0 = padL + i * gw + (gw - bw * series.length) / 2;
+      series.forEach((s, j) => {
+        const v = s.values[i], top = Math.min(y(v), y(0)), hgt = Math.max(Math.abs(y(v) - y(0)), v ? 1 : 0);
+        g.append(svgEl('rect', { x: x0 + j * bw, y: top, width: Math.max(bw - 1, 1), height: hgt, class: 'bar ' + s.cls }, svgEl('title', {}, `${lb} — ${s.name}: ${fmtNum(v)}`)));
+      });
+      if (i % step === 0) g.append(svgEl('text', { x: padL + i * gw + gw / 2, y: H - 8, class: 'tick', 'text-anchor': 'middle' }, lb.slice(5)));
+    });
+    return g;
+  }
+
+  async function pageDashboard() {
+    const V = viewFor();
+    const f = { warehouse_id: '', days: 30 };
+    const box = h('div');
+    async function load() {
+      const d = await api('/dashboard' + qs(f));
+      if (main() !== V.el) return;
+      const k = d.kpi;
+      const card = (label, value, cls, href) => h(href ? 'a' : 'div', { class: 'stat ' + (cls || ''), href }, h('b', {}, fmtNum(value)), h('span', {}, label));
+      const dates = d.series.map((x) => x.date);
+      const topMax = Math.max(1, ...d.top_products.map((p) => Number(p.sold)));
+      box.replaceChildren(
+        h('div', { class: 'stats' },
+          card(t('dash.totalQty'), k.total_qty), card(t('dash.skuInStock'), k.sku_in_stock),
+          card(t('dash.lowStock'), k.low_stock, k.low_stock ? 'warn' : '', '#/reports'), card(t('dash.outOfStock'), k.out_of_stock, k.out_of_stock ? 'bad' : ''),
+          card(t('dash.soldToday'), k.sold_today, 'good'), card(t('dash.soldPeriod', { n: d.days }), k.sold_period),
+          card(t('dash.inTransit'), k.transfers_in_transit, '', '#/transfers'), card(t('dash.draftDocs'), k.draft_documents, k.draft_documents ? 'warn' : '', '#/docs')),
+        h('div', { class: 'grid2' },
+          h('div', { class: 'card' }, h('h3', {}, t('dash.salesChart', { n: d.days })), barChart(dates, [{ name: t('rep.c.sold'), cls: 'a', values: d.series.map((x) => x.sold) }])),
+          h('div', { class: 'card' }, h('h3', {}, t('dash.flowChart', { n: d.days })),
+            barChart(dates, [{ name: t('lbl.in'), cls: 'a', values: d.series.map((x) => x.in) }, { name: t('lbl.out'), cls: 'b', values: d.series.map((x) => x.out) }]),
+            h('p', { class: 'legend' }, h('i', { class: 'sw a' }), t('lbl.in'), ' ', h('i', { class: 'sw b' }), t('lbl.out')))),
+        h('div', { class: 'grid2' },
+          h('div', { class: 'card' }, h('h3', {}, t('dash.topProducts')),
+            d.top_products.length ? d.top_products.map((p) => h('div', { class: 'hbar' },
+              h('span', { class: 'nm' }, `${p.product_code} — ${p.product_name}`),
+              h('span', { class: 'bg' }, h('i', { style: `width:${Math.round((Number(p.sold) / topMax) * 100)}%` })), h('b', {}, fmtNum(p.sold)))) : h('p', { class: 'empty' }, t('lbl.noData'))),
+          h('div', { class: 'card' }, h('h3', {}, t('dash.byWarehouse')),
+            table([t('lbl.warehouse'), { label: t('dash.skuInStock'), num: true }, { label: t('lbl.qtyPc'), num: true }],
+              d.by_warehouse.map((w) => h('tr', {}, td(`${w.warehouse_code} — ${w.name}`), td(fmtNum(w.skus), true), td(fmtNum(w.qty), true)))))),
+        h('div', { class: 'card' }, h('h3', {}, t('dash.lowItems')),
+          table([t('lbl.warehouse'), t('lbl.product'), { label: t('lbl.qtyPc'), num: true }, { label: t('lbl.reorder'), num: true }],
+            d.low_stock_items.map((r) => h('tr', { class: 'low' }, td(r.warehouse_code), td(`${r.product_code} — ${r.product_name}`), td(fmtNum(r.qty), true), td(fmtNum(r.reorder_level), true))))));
+    }
+    const whSel = select([['', t('lbl.all')], ...S.whs.filter((w) => S.me.warehouses.includes(w.warehouse_id) && w.warehouse_type === 'PHYSICAL').map((w) => [w.warehouse_id, w.warehouse_code + ' — ' + w.name])], '',
+      { onchange: (e) => { f.warehouse_id = e.target.value; load().catch(fail); } });
+    V(h('h2', {}, t('nav.dashboard')),
+      h('div', { class: 'filters' }, field(t('lbl.warehouse'), whSel),
+        field(t('dash.period'), select([[7, t('dash.lastDays', { n: 7 })], [30, t('dash.lastDays', { n: 30 })], [90, t('dash.lastDays', { n: 90 })]], 30, { onchange: (e) => { f.days = Number(e.target.value); load().catch(fail); } }))),
+      box);
+    await load();
+  }
+
+  // ---------------------------------------------------------------- reports
+  async function downloadFile(path, params, filename) {
+    const res = await fetch('/api' + path + qs(params), { headers: { Authorization: 'Bearer ' + S.token } });
+    if (!res.ok) { let e; try { e = (await res.json()).error; } catch (_) { e = null; } fail(Object.assign(new Error((e && e.message) || t('err.UNKNOWN')), e || {})); return; }
+    const url = URL.createObjectURL(await res.blob());
+    const a = h('a', { href: url, download: filename });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  async function pageReports() {
+    const V = viewFor();
+    const defs = await api('/reports' + qs({ lang: S.lang }));
+    const f = { name: defs[0].name, warehouse_id: '', date_from: '', date_to: '', days: 30, q: '', low_only: false, status: '', class: '', action: '' };
+    const filters = h('div', { class: 'filters' }), out = h('div'), info = h('p', { class: 'hint' });
+    const usesDates = () => ['movements', 'sales_summary', 'transfers', 'audit'].includes(f.name);
+    const params = () => {
+      const p = { lang: S.lang, warehouse_id: f.warehouse_id };
+      if (usesDates()) { p.date_from = f.date_from; p.date_to = f.date_to; }
+      if (f.name === 'movers') { p.days = f.days; p.class = f.class; }
+      if (f.name === 'stock_balance') { p.q = f.q; p.low_only = f.low_only; }
+      if (f.name === 'transfers') p.status = f.status;
+      if (f.name === 'audit') p.action = f.action;
+      return p;
+    };
+    const cell = (kind, v, labels) => {
+      if (v == null || v === '') return '';
+      if (kind === 's') return labels[v] || v;
+      if (kind === 'n') return fmtNum(v);
+      if (kind === 'f') return Number(v).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+      if (kind === 'd') return fmtDate(v);
+      if (kind === 'dt') return fmtDateTime(v);
+      const sv = String(v);
+      return hasKey('doc.' + sv) ? t('doc.' + sv) : hasKey('status.' + sv) ? t('status.' + sv) : hasKey('tf.mode.' + sv) ? t('tf.mode.' + sv) : sv;
+    };
+    async function run() {
+      try {
+        const r = await api('/reports/' + f.name + qs({ ...params(), limit: 200 }));
+        if (main() !== V.el) return;
+        info.textContent = t('rep.total', { n: fmtNum(r.total) }) + (r.truncated ? ' ' + t('rep.truncated') : '') + (r.total > 200 ? ' · ' + t('rep.previewLimit') : '');
+        out.replaceChildren(table(r.columns.map((c) => ({ label: c.text, num: ['n', 'f'].includes(c.kind) })),
+          r.rows.map((row) => h('tr', { class: ['LOW', 'OUT'].includes(row.status) ? 'low' : '' }, r.columns.map((c) => td(cell(c.kind, row[c.key], r.labels), ['n', 'f'].includes(c.kind)))))));
+      } catch (e) { fail(e); }
+    }
+    function drawFilters() {
+      const def = defs.find((d) => d.name === f.name);
+      const whs = S.whs.filter((w) => S.me.warehouses.includes(w.warehouse_id) && w.warehouse_type === 'PHYSICAL');
+      const input = (type, key, extra) => h('input', { type, value: f[key], ...extra, onchange: (e) => { f[key] = type === 'checkbox' ? e.target.checked : e.target.value; run(); } });
+      filters.replaceChildren(
+        field(t('rep.choose'), select(defs.map((d) => [d.name, d.title]), f.name, { onchange: (e) => { f.name = e.target.value; drawFilters(); run(); } })),
+        f.name !== 'audit' ? field(t('lbl.warehouse'), select([['', t('lbl.all')], ...whOptions(whs)], f.warehouse_id, { onchange: (e) => { f.warehouse_id = e.target.value; run(); } })) : null,
+        usesDates() ? field(t('lbl.dateFrom'), input('date', 'date_from')) : null, usesDates() ? field(t('lbl.dateTo'), input('date', 'date_to')) : null,
+        f.name === 'movers' ? field(t('rep.days'), input('number', 'days', { min: 1, max: 365 })) : null,
+        f.name === 'movers' ? field(t('rep.class'), select([['', t('lbl.all')], ...['FAST', 'NORMAL', 'SLOW', 'DEAD'].map((c) => [c, t('rep.cls.' + c)])], f.class, { onchange: (e) => { f.class = e.target.value; run(); } })) : null,
+        f.name === 'stock_balance' ? field(t('lbl.searchProduct'), h('input', { type: 'search', value: f.q, oninput: debounce((e) => { f.q = e.target.value; run(); }) })) : null,
+        f.name === 'stock_balance' ? h('label', { class: 'check' }, input('checkbox', 'low_only', { checked: f.low_only }), t('lbl.lowOnly')) : null,
+        f.name === 'transfers' ? field(t('lbl.status'), select([['', t('lbl.all')], ...['DRAFT', 'IN_TRANSIT', 'PARTIAL', 'COMPLETED', 'CANCELLED'].map((x) => [x, t('status.' + x)])], f.status, { onchange: (e) => { f.status = e.target.value; run(); } })) : null,
+        f.name === 'audit' ? field(t('rep.action'), input('text', 'action', { placeholder: 'POST_DOC' })) : null,
+        h('button', { class: 'primary', onclick: () => downloadFile('/reports/' + f.name, { ...params(), format: 'xlsx' }, `${f.name}.xlsx`) }, t('btn.exportExcel')),
+        h('button', { onclick: () => downloadFile('/reports/' + f.name, { ...params(), format: 'pdf' }, `${f.name}.pdf`) }, t('btn.exportPdf')));
+      void def;
+    }
+    drawFilters();
+    const integ = h('div');
+    const adminBox = isAdmin() ? h('div', { class: 'card' }, h('h3', {}, t('rep.integrity')), h('p', { class: 'hint' }, t('rep.integrityHint')),
+      h('button', { onclick: async () => {
+        try {
+          const r = await api('/admin/integrity');
+          integ.replaceChildren(h('p', { class: 'banner ' + (r.ok ? 'ok' : 'warn') }, r.ok ? t('rep.integrityOk') : t('rep.integrityBad')),
+            table([t('rep.check'), t('lbl.status'), { label: t('rep.issues'), num: true }],
+              r.checks.map((c) => h('tr', { class: c.ok ? '' : 'low' }, td(hasKey('chk.' + c.name) ? t('chk.' + c.name) : c.name), td(c.ok ? 'OK' : '✗'), td(fmtNum(c.count), true)))));
+        } catch (e) { fail(e); }
+      } }, t('rep.runIntegrity')), integ) : null;
+    V(h('h2', {}, t('nav.reports')), filters, info, out, adminBox);
+    await run();
+  }
+
+  // ---------------------------------------------------------------- account
+  async function pageAccount() {
+    const V = viewFor();
+    const v = { current_password: '', new_password: '', confirm: '' };
+    const inp = (k) => h('input', { type: 'password', autocomplete: k === 'current_password' ? 'current-password' : 'new-password', oninput: (e) => { v[k] = e.target.value; } });
+    V(h('h2', {}, t('nav.account')),
+      h('p', {}, `${S.me.full_name} (${S.me.username}) · ${S.me.role_code}`),
+      h('form', { class: 'card form', onsubmit: async (e) => {
+        e.preventDefault();
+        if (v.new_password !== v.confirm) { toast(t('acct.mismatch'), 'err'); return; }
+        try {
+          const r = await api('/me/password', { method: 'POST', body: { current_password: v.current_password, new_password: v.new_password } });
+          S.token = r.token; localStorage.setItem('wms_token', r.token);
+          toast(t('acct.changed')); e.target.reset(); v.current_password = v.new_password = v.confirm = '';
+        } catch (err) { fail(err); }
+      } },
+      h('h3', { class: 'wide' }, t('acct.changePassword')),
+      field(t('acct.current'), inp('current_password')), field(t('acct.new'), inp('new_password')), field(t('acct.confirm'), inp('confirm')),
+      h('p', { class: 'hint wide' }, t('acct.policy')),
+      h('div', { class: 'actions wide' }, h('button', { class: 'primary', type: 'submit' }, t('btn.save')))));
+  }
+
   // ---------------------------------------------------------------- router
   function route() {
     if (!S.me) return;
     const parts = location.hash.replace(/^#\/?/, '').split('/');
-    const [page, arg] = [parts[0] || 'stock', parts[1]];
+    const [page, arg] = [parts[0] || 'dashboard', parts[1]];
     renderShell();
     const run = {
       stock: pageStock, docs: pageDocs, doc: () => pageDoc(Number(arg)), new: () => pageNewDoc(arg),
+      dashboard: pageDashboard, reports: pageReports, account: pageAccount,
       import: pageImport, imports: pageImports,
       transfers: pageTransfers, 'transfer-new': pageNewTransfer, transfer: () => pageTransfer(Number(arg)),
       movements: pageMovements, products: pageProducts, counts: pageCounts, masters: () => pageMasters(arg || 'warehouses'), users: pageUsers,
-    }[page] || pageStock;
+    }[page] || pageDashboard;
     Promise.resolve(run()).catch(fail);
   }
 
@@ -1062,7 +1240,7 @@
     try {
       S.me = await api('/me');
       await loadRef();
-      if (!location.hash) location.hash = '#/stock';
+      if (!location.hash) location.hash = '#/dashboard';
       route();
     } catch (e) {
       if (e.status !== 401) fail(e);

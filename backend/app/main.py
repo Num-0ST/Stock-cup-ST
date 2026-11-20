@@ -16,8 +16,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import engine, importer, readers, transfers
-from .auth import decode_token, hash_password, make_token, verify_password
+from . import engine, importer, readers, reports, transfers
+from .auth import (check_password_policy, decode_token_full, hash_password, make_token, verify_password)
 from .db import close_pool, get_conn, get_pool
 from .engine import StockError, audit
 
@@ -57,6 +57,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Multi-Warehouse Inventory", version="0.2.0", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+    if request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.exception_handler(StockError)
 async def stock_error_handler(_: Request, exc: StockError):
     return JSONResponse({"error": exc.as_dict()}, status_code=exc.status)
@@ -88,7 +104,7 @@ def current_user(authorization: Optional[str] = Header(None), conn=Depends(get_c
     if not authorization or not authorization.lower().startswith("bearer "):
         raise Unauthorized("กรุณาเข้าสู่ระบบ")
     try:
-        uid = decode_token(authorization.split(" ", 1)[1])
+        uid, iat = decode_token_full(authorization.split(" ", 1)[1])
     except jwt.PyJWTError:
         raise Unauthorized("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่")
     u = conn.execute(
@@ -96,6 +112,8 @@ def current_user(authorization: Optional[str] = Header(None), conn=Depends(get_c
     ).fetchone()
     if not u or not u["is_active"]:
         raise Unauthorized("บัญชีนี้ใช้งานไม่ได้")
+    if u["password_changed_at"] and iat < int(u["password_changed_at"].timestamp()):
+        raise Unauthorized("รหัสผ่านถูกเปลี่ยนแล้ว กรุณาเข้าสู่ระบบใหม่")
     rows = conn.execute("SELECT * FROM user_warehouse_access WHERE user_id=%s", (uid,)).fetchall()
     u["access"] = {r["warehouse_id"]: r for r in rows}
     return u
@@ -245,15 +263,81 @@ def health():
     return {"status": "ok"}
 
 
+MAX_FAILED_LOGINS = 5
+LOCK_MINUTES = 15
+
+
+class TooManyAttempts(StockError):
+    status, code = 429, "ACCOUNT_LOCKED"
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    import ipaddress
+    host = request.client.host if request.client else None
+    try:
+        return str(ipaddress.ip_address(host)) if host else None
+    except ValueError:
+        return None
+
+
 @app.post("/api/auth/login")
-def login(body: LoginIn, conn=Depends(get_conn)):
+def login(body: LoginIn, request: Request, conn=Depends(get_conn)):
+    ip = _client_ip(request)
     u = conn.execute("SELECT * FROM users WHERE username=%s", (body.username,)).fetchone()
+    if u and u["locked_until"] and u["locked_until"] > conn.execute("SELECT now() AS n").fetchone()["n"]:
+        audit(conn.cursor(), u["user_id"], "LOGIN_BLOCKED", "user", u["user_id"], ip=ip)
+        raise TooManyAttempts(f"บัญชีถูกล็อกชั่วคราว (ลองผิดหลายครั้ง) กรุณารอ {LOCK_MINUTES} นาที หรือให้ผู้ดูแลปลดล็อก",
+                              minutes=LOCK_MINUTES)
     if not u or not u["is_active"] or not verify_password(body.password, u["password_hash"]):
+        if u:
+            # separate autocommit statements so the failure is recorded even though we raise
+            row = conn.execute(
+                """UPDATE users SET failed_logins = failed_logins + 1,
+                          locked_until = CASE WHEN failed_logins + 1 >= %s THEN now() + make_interval(mins => %s) ELSE locked_until END
+                   WHERE user_id=%s RETURNING failed_logins, locked_until""", (MAX_FAILED_LOGINS, LOCK_MINUTES, u["user_id"])).fetchone()
+            locked = row["failed_logins"] >= MAX_FAILED_LOGINS
+            if locked:
+                conn.execute("UPDATE users SET failed_logins=0 WHERE user_id=%s", (u["user_id"],))
+            audit(conn.cursor(), u["user_id"], "ACCOUNT_LOCKED" if locked else "LOGIN_FAILED", "user", u["user_id"], ip=ip)
+        else:
+            audit(conn.cursor(), None, "LOGIN_FAILED", "user", body.username[:50], ip=ip)
         raise Unauthorized("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
     with conn.transaction():
-        conn.execute("UPDATE users SET last_login_at=now() WHERE user_id=%s", (u["user_id"],))
-        audit(conn.cursor(), u["user_id"], "LOGIN", "user", u["user_id"])
+        conn.execute("UPDATE users SET last_login_at=now(), failed_logins=0, locked_until=NULL WHERE user_id=%s", (u["user_id"],))
+        audit(conn.cursor(), u["user_id"], "LOGIN", "user", u["user_id"], ip=ip)
     return {"token": make_token(u["user_id"])}
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/me/password")
+def change_password(body: PasswordChangeIn, u=Depends(current_user), conn=Depends(get_conn)):
+    if not verify_password(body.current_password, u["password_hash"]):
+        raise engine.ValidationFailed("รหัสผ่านปัจจุบันไม่ถูกต้อง", field="current_password", code_hint="BAD_CURRENT_PASSWORD")
+    err = check_password_policy(body.new_password, u["username"])
+    if err:
+        raise engine.ValidationFailed(err, field="new_password", code_hint="WEAK_PASSWORD")
+    if body.new_password == body.current_password:
+        raise engine.ValidationFailed("รหัสผ่านใหม่ต้องต่างจากรหัสผ่านเดิม", field="new_password", code_hint="SAME_PASSWORD")
+    with conn.transaction():
+        conn.execute("UPDATE users SET password_hash=%s, password_changed_at=now() WHERE user_id=%s",
+                     (hash_password(body.new_password), u["user_id"]))
+        audit(conn.cursor(), u["user_id"], "CHANGE_PASSWORD", "user", u["user_id"])
+    return {"token": make_token(u["user_id"])}                 # older tokens are now rejected
+
+
+@app.post("/api/users/{user_id}/unlock")
+def unlock_user(user_id: int, u=Depends(current_user), conn=Depends(get_conn)):
+    require_role(u, "ADMIN")
+    with conn.transaction():
+        n = conn.execute("UPDATE users SET failed_logins=0, locked_until=NULL WHERE user_id=%s", (user_id,)).rowcount
+        if not n:
+            raise engine.NotFound("ไม่พบผู้ใช้")
+        audit(conn.cursor(), u["user_id"], "UNLOCK_USER", "user", user_id)
+    return {"ok": True}
 
 
 @app.get("/api/me")
@@ -453,6 +537,9 @@ def create_user(body: UserIn, u=Depends(current_user), conn=Depends(get_conn)):
     role = conn.execute("SELECT role_id FROM roles WHERE role_code=%s", (body.role_code,)).fetchone()
     if not role:
         raise engine.ValidationFailed("ไม่พบบทบาทผู้ใช้", field="role_code")
+    err = check_password_policy(body.password, body.username)
+    if err:
+        raise engine.ValidationFailed(err, field="password", code_hint="WEAK_PASSWORD")
     with conn.transaction():
         uid = conn.execute(
             "INSERT INTO users (username, password_hash, full_name, email, role_id) VALUES (%s,%s,%s,%s,%s) RETURNING user_id",
@@ -480,7 +567,11 @@ def update_user(user_id: int, body: UserUpdateIn, u=Depends(current_user), conn=
         if body.full_name:
             conn.execute("UPDATE users SET full_name=%s WHERE user_id=%s", (body.full_name, user_id))
         if body.password:
-            conn.execute("UPDATE users SET password_hash=%s WHERE user_id=%s", (hash_password(body.password), user_id))
+            err = check_password_policy(body.password, cur["username"])
+            if err:
+                raise engine.ValidationFailed(err, field="password", code_hint="WEAK_PASSWORD")
+            conn.execute("UPDATE users SET password_hash=%s, password_changed_at=now(), failed_logins=0, locked_until=NULL WHERE user_id=%s",
+                         (hash_password(body.password), user_id))
         if body.is_active is not None:
             conn.execute("UPDATE users SET is_active=%s WHERE user_id=%s", (body.is_active, user_id))
         if body.warehouses is not None:
@@ -1040,6 +1131,79 @@ def cancel_transfer(transfer_id: int, body: CancelIn, idempotency_key: Optional[
                                           _hash({"id": transfer_id, "r": body.reason}),
                                           lambda: transfers.cancel_transfer(conn, transfer_id, u["user_id"], body.reason))
     return {"transfer_id": tid, "replayed": replayed, "transfer": transfer_detail(conn, tid)}
+
+
+# ------------------------------------------------------------------ dashboard & reports (Phase 5)
+
+
+@app.get("/api/dashboard")
+def get_dashboard(warehouse_id: Optional[int] = None, days: int = 30, u=Depends(current_user), conn=Depends(get_conn)):
+    whs = viewable_warehouses(conn, u)
+    if warehouse_id is not None and warehouse_id not in whs:
+        raise Forbidden("คุณไม่มีสิทธิ์ดูคลังสินค้านี้")
+    return reports.dashboard(conn, whs, warehouse_id, days)
+
+
+@app.get("/api/reports")
+def list_reports(lang: str = "th", u=Depends(current_user)):
+    lang = lang if lang in reports.L else "th"
+    return [{"name": n, "title": reports.lab(lang, tk), "admin_only": adm,
+             "columns": [{"key": k, "label": lk, "text": reports.lab(lang, lk), "kind": kind} for k, lk, kind in cols]}
+            for n, (tk, cols, _, adm) in reports.REPORTS.items() if not adm or is_admin(u)]
+
+
+@app.get("/api/reports/{name}")
+def get_report(name: str, format: str = "json", lang: str = "th", warehouse_id: Optional[int] = None,
+               date_from: Optional[date] = None, date_to: Optional[date] = None, product_id: Optional[int] = None,
+               category_id: Optional[int] = None, q: Optional[str] = None, low_only: bool = False, days: Optional[int] = None,
+               txn_type: Optional[str] = None, status: Optional[str] = None, action: Optional[str] = None,
+               klass: Optional[str] = Query(None, alias="class"), limit: int = 500, offset: int = 0,
+               u=Depends(current_user), conn=Depends(get_conn)):
+    if name not in reports.REPORTS:
+        raise engine.NotFound("ไม่พบรายงาน")
+    if reports.REPORTS[name][3]:
+        require_role(u, "ADMIN")
+    if format not in ("json", "xlsx", "pdf"):
+        raise engine.ValidationFailed("รูปแบบไฟล์ไม่ถูกต้อง", field="format")
+    lang = lang if lang in reports.L else "th"
+    whs = viewable_warehouses(conn, u)
+    if warehouse_id is not None and warehouse_id not in whs:
+        raise Forbidden("คุณไม่มีสิทธิ์ดูคลังสินค้านี้")
+    params = {"warehouse_id": warehouse_id, "date_from": date_from, "date_to": date_to, "product_id": product_id,
+              "category_id": category_id, "q": q, "low_only": low_only, "days": days, "txn_type": txn_type,
+              "status": status, "action": action, "class": klass}
+    try:
+        rows, total, truncated = reports.run_report(conn, name, whs, params)
+    except reports.ReportError as e:
+        raise engine.ValidationFailed(str(e), code_hint="BAD_REPORT_PARAMS")
+    desc = ", ".join(f"{k}={v}" for k, v in params.items() if v not in (None, "", False))
+    if format == "json":
+        limit, offset = clean_page(limit, offset)
+        cols = reports.REPORTS[name][1]
+        return {"name": name, "title": reports.lab(lang, reports.REPORTS[name][0]), "total": total, "truncated": truncated,
+                "columns": [{"key": k, "label": lk, "text": reports.lab(lang, lk), "kind": kd} for k, lk, kd in cols],
+                "labels": {c: reports.lab(lang, c) for c in ("OK", "LOW", "OUT", "FAST", "NORMAL", "SLOW", "DEAD")},
+                "rows": rows[offset:offset + limit]}
+    audit(conn.cursor(), u["user_id"], "EXPORT_REPORT", "report", name, new={"format": format, "filters": desc, "rows": total})
+    stamp = date.today().strftime("%Y%m%d")
+    if format == "xlsx":
+        data = reports.to_xlsx(name, rows, lang, desc)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        try:
+            data = reports.to_pdf(name, rows, lang, desc, truncated)
+        except reports.ReportError as e:
+            raise engine.ValidationFailed(str(e), code_hint="PDF_UNAVAILABLE")
+        media = "application/pdf"
+    return Response(data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}_{stamp}.{format}"'})
+
+
+@app.get("/api/admin/integrity")
+def integrity(u=Depends(current_user), conn=Depends(get_conn)):
+    require_role(u, "ADMIN")
+    result = reports.integrity_check(conn)
+    audit(conn.cursor(), u["user_id"], "INTEGRITY_CHECK", "system", "integrity", new={"ok": result["ok"]})
+    return result
 
 
 # ------------------------------------------------------------------ frontend

@@ -31,6 +31,28 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
 
+  backup:
+    image: postgres:16
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: ${DB_USER:-wms}
+      PGPASSWORD: ${DB_PASSWORD}
+      PGDATABASE: ${DB_NAME:-wms}
+      BACKUP_DIR: /backups
+      UPLOAD_DIR: /data/uploads
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_HOUR: ${BACKUP_HOUR:-02}
+      TZ: ${TZ:-Asia/Bangkok}
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./backups:/backups
+      - uploads:/data/uploads:ro
+    entrypoint: ["/bin/bash", "/scripts/backup-loop.sh"]
+
 volumes:
   pgdata:
   uploads:
