@@ -183,6 +183,29 @@ def _shortage_error(cur, shortages: list[tuple[int, int, int]], message: str) ->
 # ---------------------------------------------------------------- documents
 
 
+def _deposit_base(item: dict, factor: int, base: Decimal, line_no: int, doc_type: str) -> int:
+    """Part of a sale line the customer leaves in the warehouse (same unit as the line), in PC."""
+    raw = item.get("deposit_qty")
+    if raw in (None, "", 0, "0"):
+        return 0
+    if doc_type != "SALE":
+        raise ValidationFailed(f"บรรทัด {line_no}: ฝากคลังได้เฉพาะบิลขาย", line=line_no, code_hint="DEPOSIT_NOT_SALE")
+    try:
+        dq = Decimal(str(raw))
+    except (InvalidOperation, TypeError):
+        raise ValidationFailed(f"บรรทัด {line_no}: จำนวนฝากไม่ถูกต้อง", line=line_no, code_hint="BAD_QTY")
+    if dq < 0:
+        raise ValidationFailed(f"บรรทัด {line_no}: จำนวนฝากต้องไม่ติดลบ", line=line_no, code_hint="BAD_QTY")
+    db = dq * factor
+    if db != db.to_integral_value():
+        raise ValidationFailed(f"บรรทัด {line_no}: จำนวนฝากหลังแปลงเป็น PC ต้องเป็นจำนวนเต็ม", line=line_no,
+                               code_hint="NOT_WHOLE_PC")
+    if db > base:
+        raise ValidationFailed(f"บรรทัด {line_no}: จำนวนฝากมากกว่าจำนวนขาย", line=line_no, code_hint="DEPOSIT_EXCEEDS_SALE")
+    return int(db)
+
+
+
 def create_document(conn: psycopg.Connection, data: dict, user_id: int) -> int:
     """Create a DRAFT document. Does not touch stock."""
     doc_type = data.get("doc_type")
@@ -215,6 +238,7 @@ def create_document(conn: psycopg.Connection, data: dict, user_id: int) -> int:
         except psycopg.errors.UniqueViolation:
             raise DuplicateDocument(f"เลขที่เอกสาร {doc_no} ถูกใช้แล้ว", doc_no=doc_no)
 
+        has_deposit = False
         for line_no, item in enumerate(items_in, start=1):
             product = resolve_product(cur, item)
             unit_id, factor = resolve_unit_and_factor(cur, product, item)
@@ -228,12 +252,17 @@ def create_document(conn: psycopg.Connection, data: dict, user_id: int) -> int:
             if base != base.to_integral_value():
                 raise ValidationFailed(
                     f"บรรทัด {line_no}: จำนวนหลังแปลงเป็น PC ต้องเป็นจำนวนเต็ม ({base})", line=line_no, code_hint="NOT_WHOLE_PC")
+            dep_base = _deposit_base(item, factor, base, line_no, doc_type)
+            if dep_base:
+                has_deposit = True
             cur.execute(
                 """INSERT INTO stock_document_items
-                     (document_id, line_no, product_id, unit_id, qty, conversion_factor, base_qty)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-                (document_id, line_no, product["product_id"], unit_id, qty, factor, int(base)),
+                     (document_id, line_no, product_id, unit_id, qty, conversion_factor, base_qty, deposit_qty_base)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (document_id, line_no, product["product_id"], unit_id, qty, factor, int(base), dep_base),
             )
+        if has_deposit and not data.get("customer_id"):
+            raise ValidationFailed("บิลที่มีของฝากคลังต้องระบุลูกค้า", field="customer_id", code_hint="DEPOSIT_NEEDS_CUSTOMER")
         audit(cur, user_id, "CREATE_DOC", "stock_document", document_id, data["warehouse_id"],
               new={"doc_type": doc_type, "doc_no": doc_no, "lines": len(items_in)})
         return document_id
@@ -305,6 +334,9 @@ def post_document(conn: psycopg.Connection, document_id: int, user_id: int) -> i
             "UPDATE stock_documents SET status='POSTED', posted_by=%s, posted_at=now() WHERE document_id=%s",
             (user_id, document_id),
         )
+        if doc["doc_type"] == "SALE":
+            from . import deposits  # local import: deposits depends on this module
+            deposits.create_on_post(cur, doc, items, user_id)
         audit(cur, user_id, "POST_DOC", "stock_document", document_id, wh,
               old={"status": "DRAFT"}, new={"status": "POSTED", "doc_no": doc["doc_no"], "doc_type": doc["doc_type"]})
         return document_id
@@ -370,6 +402,9 @@ def reverse_document(conn: psycopg.Connection, document_id: int, user_id: int, r
             )
         _write_balances(cur, wh, sim)
         cur.execute("UPDATE stock_documents SET status='REVERSED' WHERE document_id=%s", (document_id,))
+        if doc["doc_type"] == "SALE":
+            from . import deposits
+            deposits.cancel_for_reversed_sale(cur, document_id, user_id)
         audit(cur, user_id, "REVERSE_DOC", "stock_document", document_id, wh,
               old={"status": "POSTED"}, new={"status": "REVERSED", "reversal_document_id": rev_id, "reason": reason})
         return rev_id
@@ -392,11 +427,14 @@ def create_count(conn: psycopg.Connection, warehouse_id: int, product_id: int, c
                     (warehouse_id, product_id))
         row = cur.fetchone()
         count_date = count_date or date.today()
+        from . import deposits
+        held = deposits.held_qty(cur, warehouse_id, [product_id]).get(product_id, 0)
         cur.execute(
-            """INSERT INTO stock_counts (count_no, warehouse_id, product_id, count_date, system_qty, counted_qty, counted_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING count_id""",
+            """INSERT INTO stock_counts (count_no, warehouse_id, product_id, count_date, system_qty, counted_qty,
+                                          deposit_qty, counted_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING count_id""",
             (f"CNT-{count_date:%Y%m%d}-{secrets.token_hex(2).upper()}", warehouse_id, product_id, count_date,
-             row["qty_on_hand"] if row else 0, int(counted_qty), user_id),
+             row["qty_on_hand"] if row else 0, int(counted_qty), held, user_id),
         )
         cid = cur.fetchone()["count_id"]
         audit(cur, user_id, "CREATE_COUNT", "stock_count", cid, warehouse_id,
@@ -417,7 +455,15 @@ def apply_count(conn: psycopg.Connection, count_id: int, user_id: int, reason: s
         wh, pid = cnt["warehouse_id"], cnt["product_id"]
         balances = _lock_balances(cur, wh, [pid])
         current = balances[pid]
-        diff = cnt["counted_qty"] - current
+        # the physical count includes goods customers left with us (already sold, not in qty_on_hand)
+        from . import deposits
+        held = deposits.held_qty(cur, wh, [pid]).get(pid, 0)
+        target = cnt["counted_qty"] - held
+        if target < 0:
+            raise ValidationFailed(
+                f"นับได้ {cnt['counted_qty']} PC แต่มีของฝากลูกค้า {held} PC อยู่ในคลัง ตรวจนับใหม่อีกครั้ง",
+                code_hint="COUNT_BELOW_DEPOSITS", deposit_qty=held)
+        diff = target - current
         if diff == 0:
             cur.execute("UPDATE stock_counts SET status='ADJUSTED' WHERE count_id=%s", (count_id,))
             audit(cur, user_id, "APPLY_COUNT_NO_DIFF", "stock_count", count_id, wh)
@@ -434,12 +480,12 @@ def apply_count(conn: psycopg.Connection, count_id: int, user_id: int, reason: s
                  (txn_date, warehouse_id, product_id, txn_type, qty_in, qty_out, balance_after, adjustment_id, created_by)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (date.today(), wh, pid, "ADJUST_IN" if diff > 0 else "ADJUST_OUT",
-             diff if diff > 0 else 0, -diff if diff < 0 else 0, cnt["counted_qty"], adj_id, user_id),
+             diff if diff > 0 else 0, -diff if diff < 0 else 0, target, adj_id, user_id),
         )
-        _write_balances(cur, wh, {pid: cnt["counted_qty"]})
+        _write_balances(cur, wh, {pid: target})
         cur.execute("UPDATE stock_counts SET status='ADJUSTED' WHERE count_id=%s", (count_id,))
         audit(cur, user_id, "APPLY_COUNT", "stock_adjustment", adj_id, wh,
-              old={"qty_on_hand": current}, new={"qty_on_hand": cnt["counted_qty"], "diff": diff})
+              old={"qty_on_hand": current}, new={"qty_on_hand": target, "diff": diff, "deposit_qty": held})
         return adj_id
 
 

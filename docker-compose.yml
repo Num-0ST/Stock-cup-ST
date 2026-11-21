@@ -26,6 +26,8 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
       UPLOAD_DIR: /data/uploads
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BILL_AI_MODEL: ${BILL_AI_MODEL:-claude-sonnet-5-5}
     volumes:
       - uploads:/data/uploads
     ports:

@@ -32,6 +32,7 @@ L = {
         "received": "Received", "returned_src": "Returned to source", "outstanding": "Outstanding", "time": "Time",
         "action": "Action", "entity": "Entity", "ip": "IP", "detail": "Detail",
         "OK": "OK", "LOW": "Low", "OUT": "Out of stock", "FAST": "Fast", "NORMAL": "Normal", "SLOW": "Slow", "DEAD": "No sales",
+        "deposits": "Customer deposits", "deposit_qty": "Deposited (PC)", "held": "Customer deposits (PC)", "physical": "In warehouse (PC)", "customer": "Customer", "deposit_no": "Deposit no.", "due": "Due date", "sale_no": "Sale bill", "delivered": "Delivered", "remaining": "Remaining", "OPEN": "Waiting", "PARTIAL": "Partly delivered", "COMPLETED": "Delivered", "CANCELLED": "Cancelled",
         "generated": "Generated", "page": "Page", "filters": "Filters", "rows": "rows", "truncated": "(truncated)",
     },
     "th": {
@@ -45,6 +46,7 @@ L = {
         "received": "รับแล้ว", "returned_src": "คืนต้นทาง", "outstanding": "ค้างรับ", "time": "เวลา",
         "action": "การกระทำ", "entity": "ข้อมูล", "ip": "IP", "detail": "รายละเอียด",
         "OK": "ปกติ", "LOW": "ใกล้หมด", "OUT": "หมด", "FAST": "ขายเร็ว", "NORMAL": "ปานกลาง", "SLOW": "ขายช้า", "DEAD": "ไม่มียอดขาย",
+        "deposits": "ของฝากลูกค้า (ฝากคลัง)", "deposit_qty": "ฝาก (PC)", "held": "ของฝากลูกค้า (PC)", "physical": "ของในคลังจริง (PC)", "customer": "ลูกค้า", "deposit_no": "เลขที่ใบฝาก", "due": "กำหนดส่ง", "sale_no": "บิลขาย", "delivered": "ส่งแล้ว", "remaining": "คงค้าง", "OPEN": "รอส่ง", "PARTIAL": "ส่งบางส่วน", "COMPLETED": "ส่งครบ", "CANCELLED": "ยกเลิก",
         "generated": "สร้างเมื่อ", "page": "หน้า", "filters": "เงื่อนไข", "rows": "แถว", "truncated": "(ตัดทอน)",
     },
     "lo": {
@@ -58,6 +60,7 @@ L = {
         "received": "ຮັບແລ້ວ", "returned_src": "ສົ່ງຄືນຕົ້ນທາງ", "outstanding": "ຄ້າງຮັບ", "time": "ເວລາ",
         "action": "ການກະທຳ", "entity": "ຂໍ້ມູນ", "ip": "IP", "detail": "ລາຍລະອຽດ",
         "OK": "ປົກກະຕິ", "LOW": "ໃກ້ໝົດ", "OUT": "ໝົດ", "FAST": "ຂາຍໄວ", "NORMAL": "ປານກາງ", "SLOW": "ຂາຍຊ້າ", "DEAD": "ບໍ່ມີຍອດຂາຍ",
+        "deposits": "ເຄື່ອງຝາກລູກຄ້າ (ຝາກສາງ)", "deposit_qty": "ຝາກ (PC)", "held": "ເຄື່ອງຝາກລູກຄ້າ (PC)", "physical": "ຂອງໃນສາງຕົວຈິງ (PC)", "customer": "ລູກຄ້າ", "deposit_no": "ເລກທີໃບຝາກ", "due": "ກຳນົດສົ່ງ", "sale_no": "ບິນຂາຍ", "delivered": "ສົ່ງແລ້ວ", "remaining": "ຄົງຄ້າງ", "OPEN": "ລໍຖ້າສົ່ງ", "PARTIAL": "ສົ່ງບາງສ່ວນ", "COMPLETED": "ສົ່ງຄົບ", "CANCELLED": "ຍົກເລີກ",
         "generated": "ສ້າງເມື່ອ", "page": "ໜ້າ", "filters": "ເງື່ອນໄຂ", "rows": "ແຖວ", "truncated": "(ຕັດທອນ)",
     },
 }
@@ -87,6 +90,12 @@ NET_SALES_SQL = """
 """   # a reversal is booked against the date of the transaction it undoes; docs counted only while still POSTED
 
 
+# customer deposits still waiting for delivery, per warehouse/product (already sold, still physically here)
+HELD_SQL = """SELECT d.warehouse_id, di.product_id, SUM(di.qty_base - di.qty_delivered_base - di.qty_cancelled_base) AS q
+              FROM customer_deposit_items di JOIN customer_deposits d USING (deposit_id)
+              WHERE d.status IN ('OPEN','PARTIAL') GROUP BY d.warehouse_id, di.product_id"""
+
+
 def _scope(whs: list[int], warehouse_id: int | None) -> list[int]:
     return [w for w in whs if w == warehouse_id] if warehouse_id else whs
 
@@ -108,15 +117,17 @@ def _dates(p: dict, default_days: int = 30) -> tuple[date, date]:
 def r_stock_balance(conn, whs, p, low_only=False):
     scope = _scope(whs, p.get("warehouse_id"))
     rows = conn.execute(
-        """SELECT w.warehouse_code, p.product_code, p.name AS product_name, COALESCE(c.name,'') AS category,
-                  COALESCE(b.qty_on_hand,0) AS qty, p.reorder_level,
+        f"""SELECT w.warehouse_code, p.product_code, p.name AS product_name, COALESCE(c.name,'') AS category,
+                  COALESCE(b.qty_on_hand,0) AS qty, COALESCE(h.q,0)::bigint AS deposit_qty,
+                  (COALESCE(b.qty_on_hand,0) + COALESCE(h.q,0))::bigint AS physical, p.reorder_level,
                   CASE WHEN COALESCE(b.qty_on_hand,0) <= 0 THEN 'OUT'
                        WHEN p.reorder_level > 0 AND b.qty_on_hand <= p.reorder_level THEN 'LOW' ELSE 'OK' END AS status
            FROM products p CROSS JOIN warehouses w
            LEFT JOIN stock_balances b ON b.product_id=p.product_id AND b.warehouse_id=w.warehouse_id
            LEFT JOIN categories c ON c.category_id=p.category_id
+           LEFT JOIN ({HELD_SQL}) h ON h.product_id=p.product_id AND h.warehouse_id=w.warehouse_id
            WHERE p.is_active AND w.warehouse_type='PHYSICAL' AND w.warehouse_id = ANY(%(whs)s)
-             AND (COALESCE(b.qty_on_hand,0) <> 0 OR p.reorder_level > 0)
+             AND (COALESCE(b.qty_on_hand,0) <> 0 OR p.reorder_level > 0 OR COALESCE(h.q,0) <> 0)
              AND (%(cat)s::int IS NULL OR p.category_id = %(cat)s)
              AND (%(q)s::text IS NULL OR p.product_code ILIKE %(like)s OR p.name ILIKE %(like)s OR p.barcode = %(q)s)
            ORDER BY w.warehouse_code, p.product_code""",
@@ -223,6 +234,27 @@ def r_transfers(conn, whs, p):
         {"whs": _scope(whs, p.get("warehouse_id")), "df": df, "dto": dto, "st": p.get("status") or None, "lim": MAX_EXPORT_ROWS + 1}).fetchall()
 
 
+def r_deposits(conn, whs, p):
+    st = p.get("status") or None
+    return conn.execute(
+        """SELECT d.deposit_no, d.deposit_date, d.due_date AS due, COALESCE(c.name, d.customer_name, '') AS customer,
+                  w.warehouse_code, s.doc_no AS sale_no, p.product_code, p.name AS product_name,
+                  di.qty_base AS deposit_qty, di.qty_delivered_base AS delivered,
+                  (di.qty_base - di.qty_delivered_base - di.qty_cancelled_base) AS remaining, d.status
+           FROM customer_deposits d JOIN customer_deposit_items di USING (deposit_id)
+           JOIN products p ON p.product_id = di.product_id JOIN warehouses w ON w.warehouse_id = d.warehouse_id
+           JOIN stock_documents s ON s.document_id = d.sale_document_id LEFT JOIN customers c ON c.customer_id = d.customer_id
+           WHERE d.warehouse_id = ANY(%(whs)s)
+             AND (CASE WHEN %(st)s::text IS NULL THEN d.status IN ('OPEN','PARTIAL') ELSE d.status = %(st)s END)
+             AND (%(df)s::date IS NULL OR d.deposit_date >= %(df)s) AND (%(dto)s::date IS NULL OR d.deposit_date <= %(dto)s)
+             AND (%(pid)s::bigint IS NULL OR di.product_id = %(pid)s)
+             AND (%(q)s::text IS NULL OR COALESCE(c.name, d.customer_name, '') ILIKE %(like)s OR d.deposit_no ILIKE %(like)s
+                  OR s.doc_no ILIKE %(like)s OR p.product_code ILIKE %(like)s OR p.name ILIKE %(like)s)
+           ORDER BY d.due_date NULLS LAST, d.deposit_date, d.deposit_no, p.product_code LIMIT %(lim)s""",
+        {"whs": _scope(whs, p.get("warehouse_id")), "st": st, "df": p.get("date_from"), "dto": p.get("date_to"),
+         "pid": p.get("product_id"), "q": p.get("q") or None, "like": f"%{p.get('q') or ''}%", "lim": MAX_EXPORT_ROWS + 1}).fetchall()
+
+
 def r_audit(conn, whs, p):
     df, dto = _dates(p, 7)
     return conn.execute(
@@ -239,7 +271,8 @@ def r_audit(conn, whs, p):
 # name -> (title key, [(row key, label key, kind)], fn, admin_only)
 REPORTS: dict[str, tuple[str, list[tuple[str, str, str]], Callable, bool]] = {
     "stock_balance": ("stock_balance", [("warehouse_code", "warehouse", "t"), ("product_code", "code", "t"), ("product_name", "product", "t"),
-                                         ("category", "category", "t"), ("qty", "qty", "n"), ("reorder_level", "reorder", "n"), ("status", "status", "s")], r_stock_balance, False),
+                                         ("category", "category", "t"), ("qty", "qty", "n"), ("deposit_qty", "held", "n"), ("physical", "physical", "n"),
+                                         ("reorder_level", "reorder", "n"), ("status", "status", "s")], r_stock_balance, False),
     "low_stock": ("low_stock", [("warehouse_code", "warehouse", "t"), ("product_code", "code", "t"), ("product_name", "product", "t"),
                                 ("qty", "qty", "n"), ("reorder_level", "reorder", "n"), ("status", "status", "s")], r_low_stock, False),
     "movements": ("movements", [("txn_date", "date", "d"), ("warehouse_code", "warehouse", "t"), ("product_code", "code", "t"), ("product_name", "product", "t"),
@@ -251,6 +284,10 @@ REPORTS: dict[str, tuple[str, list[tuple[str, str, str]], Callable, bool]] = {
                           ("on_hand", "on_hand", "n"), ("cover", "cover", "f"), ("class", "class", "s")], r_movers, False),
     "transfers": ("transfers", [("no", "no", "t"), ("mode", "mode", "t"), ("from_wh", "from", "t"), ("to_wh", "to", "t"), ("date", "date", "d"), ("status", "status", "t"),
                                 ("items", "items", "n"), ("sent", "sent", "n"), ("received", "received", "n"), ("returned_src", "returned_src", "n")], r_transfers, False),
+    "deposits": ("deposits", [("deposit_no", "deposit_no", "t"), ("deposit_date", "date", "d"), ("due", "due", "d"), ("customer", "customer", "t"),
+                              ("warehouse_code", "warehouse", "t"), ("sale_no", "sale_no", "t"), ("product_code", "code", "t"),
+                              ("product_name", "product", "t"), ("deposit_qty", "deposit_qty", "n"), ("delivered", "delivered", "n"),
+                              ("remaining", "remaining", "n"), ("status", "status", "s")], r_deposits, False),
     "audit": ("audit", [("time", "time", "dt"), ("user_name", "user", "t"), ("action", "action", "t"), ("entity", "entity", "t"), ("entity_id", "no", "t"),
                         ("ip", "ip", "t"), ("detail", "detail", "t")], r_audit, True),
 }
@@ -461,12 +498,18 @@ def dashboard(conn, whs: list[int], warehouse_id: int | None, days: int) -> dict
         """SELECT COUNT(*) FILTER (WHERE status IN ('IN_TRANSIT','PARTIAL')) AS in_transit, COUNT(*) FILTER (WHERE status='DRAFT') AS draft
            FROM stock_transfers WHERE from_warehouse_id = ANY(%(whs)s) OR to_warehouse_id = ANY(%(whs)s)""", base)
     draft_docs = one("SELECT COUNT(*) AS n FROM stock_documents WHERE status='DRAFT' AND warehouse_id = ANY(%(whs)s)", base)["n"]
+    dep = one("""SELECT COUNT(DISTINCT d.deposit_id) AS n,
+                        COALESCE(SUM(di.qty_base - di.qty_delivered_base - di.qty_cancelled_base),0)::bigint AS qty,
+                        COUNT(DISTINCT d.deposit_id) FILTER (WHERE d.due_date < CURRENT_DATE) AS overdue
+                 FROM customer_deposits d JOIN customer_deposit_items di USING (deposit_id)
+                 WHERE d.status IN ('OPEN','PARTIAL') AND d.warehouse_id = ANY(%(whs)s)""", base)
     return {
         "days": days, "date_from": df.isoformat(), "date_to": today.isoformat(),
         "kpi": {"total_qty": int(stock["total_qty"]), "sku_in_stock": stock["sku_in_stock"], "low_stock": len(low),
                 "out_of_stock": sum(1 for r in low if r["qty"] <= 0), "sold_today": int(today_row["qty"]), "sale_docs_today": today_row["docs"],
                 "sold_period": sum(s["sold"] for s in series), "transfers_in_transit": pending["in_transit"],
-                "transfers_draft": pending["draft"], "draft_documents": draft_docs},
+                "transfers_draft": pending["draft"], "draft_documents": draft_docs,
+                "deposits_open": dep["n"], "deposit_qty": int(dep["qty"]), "deposits_overdue": dep["overdue"]},
         "series": series, "top_products": top, "by_warehouse": by_wh, "low_stock_items": low[:10],
     }
 
@@ -513,6 +556,21 @@ def integrity_check(conn) -> dict:
         """SELECT t.transfer_no FROM stock_transfers t JOIN stock_transfer_items i USING (transfer_id)
            WHERE t.status IN ('COMPLETED','CANCELLED') GROUP BY t.transfer_no
            HAVING SUM(i.qty_sent_base - i.qty_received_base - i.qty_cancelled_base) <> 0""").fetchall())
+    add("deposits_within_sold_qty", conn.execute(
+        """SELECT i.item_id, i.base_qty, SUM(di.qty_base - di.qty_cancelled_base) AS deposited
+           FROM customer_deposit_items di JOIN stock_document_items i ON i.item_id = di.sale_item_id
+           GROUP BY i.item_id, i.base_qty HAVING SUM(di.qty_base - di.qty_cancelled_base) > i.base_qty""").fetchall())
+    add("deposits_only_on_posted_sales", conn.execute(
+        """SELECT d.deposit_no, s.doc_no, s.status FROM customer_deposits d JOIN stock_documents s ON s.document_id = d.sale_document_id
+           WHERE d.status IN ('OPEN','PARTIAL') AND (s.status <> 'POSTED' OR s.doc_type <> 'SALE')""").fetchall())
+    add("deposit_deliveries_match", conn.execute(
+        """SELECT di.deposit_item_id, di.qty_delivered_base, COALESCE(SUM(x.qty_base),0) AS delivered
+           FROM customer_deposit_items di LEFT JOIN deposit_delivery_items x USING (deposit_item_id)
+           GROUP BY di.deposit_item_id, di.qty_delivered_base HAVING di.qty_delivered_base <> COALESCE(SUM(x.qty_base),0)""").fetchall())
+    add("deposit_status_consistent", conn.execute(
+        """SELECT d.deposit_no, d.status FROM customer_deposits d JOIN customer_deposit_items di USING (deposit_id)
+           GROUP BY d.deposit_id, d.deposit_no, d.status
+           HAVING (d.status IN ('OPEN','PARTIAL')) <> (SUM(di.qty_base - di.qty_delivered_base - di.qty_cancelled_base) > 0)""").fetchall())
     add("reversed_once_only", conn.execute(
         """SELECT reverses_txn_id FROM stock_transactions WHERE reverses_txn_id IS NOT NULL GROUP BY reverses_txn_id HAVING count(*) > 1""").fetchall())
     return {"ok": all(c["ok"] for c in checks), "checked_at": datetime.now().isoformat(timespec="seconds"), "checks": checks}

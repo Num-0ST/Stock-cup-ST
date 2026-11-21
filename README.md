@@ -1,4 +1,4 @@
-# Multi-Warehouse Inventory — Phases 1–5
+# Multi-Warehouse Inventory — Phases 1–6
 
 Stack: Python 3.13 / FastAPI · PostgreSQL 16 · plain-JS web UI (Thai / English / Lao).
 
@@ -10,6 +10,8 @@ docker compose up -d --build
 ```
 Put it behind HTTPS (reverse proxy such as Caddy/nginx) before exposing it to the internet.
 The schema in `db/schema.sql` is applied automatically the first time the database volume is created.
+Upgrading: `git pull && docker compose up -d --build` — database changes in `backend/migrations/*.sql` are applied
+automatically when the API starts (recorded in `schema_migrations`; every file is safe to run more than once).
 Back up with: `docker compose exec db pg_dump -U wms wms > backup.sql`
 
 ## Tests
@@ -65,7 +67,7 @@ for negative stock, balances ≠ ledger, posted lines without ledger rows, in-tr
 **Security**: account lock for 15 min after 5 wrong passwords (admin can unlock: `POST /api/users/{id}/unlock`); password policy
 (≥ 8 chars, letters + digits); changing/resetting a password signs out all other sessions; failed/blocked logins are audited with IP;
 security headers + CSP; API responses are `no-store`; every report export is audited.
-Upgrading an existing database: `psql -f db/migrations/005_security.sql`.
+Existing databases are upgraded automatically on startup (see Deploy).
 
 **Backup / restore** (`scripts/`):
 - `docker compose` runs a `backup` service: daily at `BACKUP_HOUR` (default 02:00) → `./backups/wms-<timestamp>.dump` (+ `.sha256`, + uploads tarball),
@@ -73,3 +75,28 @@ Upgrading an existing database: `psql -f db/migrations/005_security.sql`.
 - Manual backup: `scripts/backup.sh` (needs `PG*` env). Restore: stop the API, then `FORCE=1 scripts/restore.sh backups/<file>.dump wms`.
   The script verifies the checksum and refuses to overwrite a non-empty database unless `FORCE=1`.
 - Restore was tested by dumping a live database and comparing all 24 tables row-by-row after restoring.
+
+## Phase 6 — Bill scanning & customer deposits
+
+**Scan bill (menu: สแกนบิล)** — take a photo of a printed or handwritten sales bill; Claude (vision) reads bill no., date
+(Buddhist years converted), customer, salesman, lines, units and "ฝาก" quantities. The result is matched to products
+(code → product barcode → unit barcode → name similarity), units (ลัง/แพ็ค/ชิ้น/CT/PK/PC …), customer and warehouse
+(salesman code = warehouse code, or the salesman map saved in an import template), then opens as an editable **draft** next to
+the photo with a warning on everything uncertain (low confidence, name match, unknown unit/product, duplicate bill no.,
+photo already used). Nothing touches stock until the user confirms. The photo is kept and can be viewed from the document.
+- Needs `ANTHROPIC_API_KEY` in `.env` (key from console.anthropic.com; roughly 0.1–0.5 THB per bill with the default
+  `BILL_AI_MODEL=claude-sonnet-5-5`). Without a key the page explains how to enable it; everything else works.
+- **Barcode scanning**: on every new document there is a scan box — a USB/Bluetooth barcode scanner (types + Enter) or typing a
+  code adds the product (+1 per scan; unit barcodes add that unit). The 📷 button reads a barcode/QR code from a phone photo
+  (native BarcodeDetector, else bundled ZXing). The same button on the Documents page searches by bill number.
+
+**Customer deposits (menu: ฝากคลัง)** — the customer paid but leaves part of the goods with us until a later delivery.
+- Stock is deducted when the sale is posted, so deposited goods can never be sold again. The deposit tracks what we still owe.
+- Create it on the sale itself (column "ฝากไว้" on each line) or later from a posted sale (button "ฝากคลัง"). A sale line can be
+  deposited at most up to its sold quantity; a deposit needs a customer.
+- Deliver in parts or all at once (delivery no. + history). Deliveries do not move stock (already deducted).
+- Cancel the rest (manager): either the customer returns the goods → a CUSTOMER_RETURN is posted automatically, or just close it.
+  Reversing the sale closes its deposits.
+- Stock page shows *Available* (sellable), *Customer deposits* and *In warehouse* (= both). **Stock counts count everything on the
+  shelf including deposits**; the system subtracts open deposits before adjusting.
+- Report "ของฝากลูกค้า" (Excel/PDF), dashboard card, and 4 new integrity checks.

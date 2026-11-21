@@ -16,10 +16,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import engine, importer, readers, reports, transfers
+from . import billscan, deposits, engine, importer, readers, reports, transfers
+from .migrate import run_migrations
 from .auth import (check_password_policy, decode_token_full, hash_password, make_token, verify_password)
 from .db import close_pool, get_conn, get_pool
 from .engine import StockError, audit
+from psycopg.types.json import Jsonb
 
 
 class Forbidden(StockError):
@@ -53,6 +55,7 @@ def seed_admin() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    run_migrations()
     seed_admin()
     yield
     close_pool()
@@ -70,7 +73,7 @@ async def security_headers(request: Request, call_next):
     resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     resp.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; "
+        "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
     if request.url.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store"
@@ -172,6 +175,7 @@ class ItemIn(BaseModel):
     unit_id: Optional[int] = None
     unit_code: Optional[str] = None
     qty: Decimal
+    deposit_qty: Optional[Decimal] = None      # SALE only: part the customer leaves in the warehouse (same unit)
 
 
 class DocumentIn(BaseModel):
@@ -184,6 +188,7 @@ class DocumentIn(BaseModel):
     remark: Optional[str] = None
     items: list[ItemIn]
     post: bool = False
+    bill_scan_id: Optional[int] = None         # set when the document was created from a scanned bill
 
 
 class ReverseIn(BaseModel):
@@ -425,7 +430,8 @@ def list_products(q: Optional[str] = None, active_only: bool = True, limit: int 
     return conn.execute(
         PRODUCT_SELECT + """
         WHERE (%(like)s::text IS NULL OR lower(p.product_code) LIKE %(like)s OR lower(p.name) LIKE %(like)s
-               OR p.barcode = %(exact)s)
+               OR p.barcode = %(exact)s
+               OR EXISTS (SELECT 1 FROM product_unit_conversions pc WHERE pc.product_id = p.product_id AND pc.barcode = %(exact)s))
           AND (NOT %(active)s OR p.is_active)
         ORDER BY p.product_code LIMIT %(limit)s OFFSET %(offset)s""",
         {"like": like, "exact": q.strip() if q else None, "active": active_only, "limit": limit, "offset": offset},
@@ -605,6 +611,20 @@ def document_detail(conn, document_id: int) -> dict | None:
         """SELECT i.*, p.product_code, p.name AS product_name, un.unit_code
            FROM stock_document_items i JOIN products p USING (product_id) JOIN units un USING (unit_id)
            WHERE i.document_id=%s ORDER BY i.line_no""", (document_id,)).fetchall()
+    d["deposits"] = conn.execute(
+        """SELECT d.deposit_id, d.deposit_no, d.status, d.deposit_date,
+                  sum(di.qty_base - di.qty_delivered_base - di.qty_cancelled_base)::bigint AS qty_remaining_base
+           FROM customer_deposits d JOIN customer_deposit_items di USING (deposit_id)
+           WHERE d.sale_document_id=%s GROUP BY d.deposit_id ORDER BY d.deposit_id""", (document_id,)).fetchall()
+    used = {r["sale_item_id"]: r["q"] for r in conn.execute(
+        """SELECT di.sale_item_id, sum(di.qty_base - di.qty_cancelled_base)::bigint AS q
+           FROM customer_deposit_items di JOIN customer_deposits d USING (deposit_id)
+           WHERE d.sale_document_id=%s GROUP BY di.sale_item_id""", (document_id,)).fetchall()}
+    for it in d["items"]:
+        it["deposited_base"] = used.get(it["item_id"], 0)
+    scan = conn.execute("SELECT scan_id FROM bill_scans WHERE document_id=%s ORDER BY scan_id DESC LIMIT 1",
+                        (document_id,)).fetchone()
+    d["bill_scan_id"] = scan["scan_id"] if scan else None
     return d
 
 
@@ -620,6 +640,9 @@ def create_document(body: DocumentIn, idempotency_key: Optional[str] = Header(No
             did = engine.create_document(conn, payload, u["user_id"])
             if body.post:
                 engine.post_document(conn, did, u["user_id"])
+            if body.bill_scan_id:
+                conn.execute("UPDATE bill_scans SET document_id=%s, status='USED' WHERE scan_id=%s AND document_id IS NULL",
+                             (did, body.bill_scan_id))
             return did
 
     did, replayed = engine.run_idempotent(conn, idempotency_key, u["user_id"],
@@ -722,24 +745,33 @@ def stock_balances(view: str = Query("by_warehouse", pattern="^(by_warehouse|tot
                        WHERE pc.product_id = p.product_id), '[]'::json)"""
     flt = """(%(like)s::text IS NULL OR lower(p.product_code) LIKE %(like)s OR lower(p.name) LIKE %(like)s
               OR p.barcode = %(exact)s)"""
+    held = """(SELECT di.product_id, d.warehouse_id,
+                     sum(di.qty_base - di.qty_delivered_base - di.qty_cancelled_base)::bigint AS deposit_qty
+              FROM customer_deposit_items di JOIN customer_deposits d USING (deposit_id)
+              WHERE d.status IN ('OPEN','PARTIAL') GROUP BY 1, 2)"""
     if view == "by_warehouse":
         return conn.execute(
             f"""SELECT b.warehouse_id, w.warehouse_code, w.name AS warehouse_name, p.product_id, p.product_code,
-                       p.name, p.reorder_level, b.qty_on_hand, {conv} AS conversions
+                       p.name, p.reorder_level, b.qty_on_hand, COALESCE(h.deposit_qty, 0)::bigint AS deposit_qty,
+                       (b.qty_on_hand + COALESCE(h.deposit_qty, 0))::bigint AS physical_qty, {conv} AS conversions
                 FROM stock_balances b JOIN products p USING (product_id) JOIN warehouses w USING (warehouse_id)
+                LEFT JOIN {held} h ON h.product_id = b.product_id AND h.warehouse_id = b.warehouse_id
                 WHERE b.warehouse_id = ANY(%(whs)s) AND w.warehouse_type='PHYSICAL' AND p.is_active AND {flt}
                   AND (NOT %(low)s OR b.qty_on_hand <= p.reorder_level)
                 ORDER BY p.product_code, w.warehouse_code LIMIT %(limit)s OFFSET %(offset)s""", params).fetchall()
     return conn.execute(
         f"""SELECT p.product_id, p.product_code, p.name, p.reorder_level,
                    COALESCE(sum(b.qty_on_hand), 0)::bigint AS qty_on_hand,
+                   COALESCE(sum(h.deposit_qty), 0)::bigint AS deposit_qty,
+                   (COALESCE(sum(b.qty_on_hand), 0) + COALESCE(sum(h.deposit_qty), 0))::bigint AS physical_qty,
                    COALESCE(json_agg(json_build_object('warehouse_id', b.warehouse_id, 'warehouse_code', w.warehouse_code,
-                            'qty_on_hand', b.qty_on_hand) ORDER BY w.warehouse_code)
+                            'qty_on_hand', b.qty_on_hand, 'deposit_qty', COALESCE(h.deposit_qty, 0)) ORDER BY w.warehouse_code)
                             FILTER (WHERE b.warehouse_id IS NOT NULL), '[]'::json) AS by_warehouse,
                    {conv} AS conversions
             FROM products p
             LEFT JOIN stock_balances b ON b.product_id = p.product_id AND b.warehouse_id = ANY(%(whs)s)
             LEFT JOIN warehouses w ON w.warehouse_id = b.warehouse_id AND w.warehouse_type='PHYSICAL'
+            LEFT JOIN {held} h ON h.product_id = b.product_id AND h.warehouse_id = b.warehouse_id
             WHERE p.is_active AND {flt}
             GROUP BY p.product_id
             HAVING (NOT %(low)s OR COALESCE(sum(b.qty_on_hand), 0) <= p.reorder_level)
@@ -1137,6 +1169,187 @@ def cancel_transfer(transfer_id: int, body: CancelIn, idempotency_key: Optional[
     return {"transfer_id": tid, "replayed": replayed, "transfer": transfer_detail(conn, tid)}
 
 
+# ------------------------------------------------------------------ customer deposits (ฝากคลัง)
+
+
+class DepositLineIn(BaseModel):
+    sale_item_id: int
+    qty: Decimal = Field(gt=0)
+    unit_code: Optional[str] = None
+
+
+class DepositIn(BaseModel):
+    sale_document_id: int
+    items: list[DepositLineIn]
+    deposit_date: Optional[date] = None
+    due_date: Optional[date] = None
+    remark: Optional[str] = Field(None, max_length=500)
+    customer_name: Optional[str] = Field(None, max_length=200)
+
+
+class DeliveryLineIn(BaseModel):
+    deposit_item_id: int
+    qty: Decimal = Field(gt=0)
+    unit_code: Optional[str] = None
+
+
+class DeliverIn(BaseModel):
+    lines: Optional[list[DeliveryLineIn]] = None       # None = deliver everything still deposited
+    delivery_date: Optional[date] = None
+    remark: Optional[str] = Field(None, max_length=500)
+
+
+class DepositCancelIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+    return_to_stock: bool = True
+
+
+def _deposit_for_action(conn, u, deposit_id: int) -> dict:
+    d = conn.execute("SELECT deposit_id, warehouse_id FROM customer_deposits WHERE deposit_id=%s", (deposit_id,)).fetchone()
+    if not d:
+        raise engine.NotFound("ไม่พบใบฝากสินค้า")
+    require_doc_write(u, "SALE", d["warehouse_id"])
+    return d
+
+
+@app.get("/api/deposits")
+def list_deposits(status: Optional[str] = None, warehouse_id: Optional[int] = None, customer_id: Optional[int] = None,
+                  q: Optional[str] = None, open_only: bool = False, limit: int = 100, offset: int = 0,
+                  u=Depends(current_user), conn=Depends(get_conn)):
+    limit, offset = clean_page(limit, offset)
+    whs = viewable_warehouses(conn, u)
+    if warehouse_id is not None:
+        whs = [w for w in whs if w == warehouse_id]
+    like = f"%{q.strip().lower()}%" if q and q.strip() else None
+    return conn.execute(
+        """SELECT d.deposit_id, d.deposit_no, d.status, d.deposit_date, d.due_date, d.warehouse_id, w.warehouse_code,
+                  w.name AS warehouse_name, s.doc_no AS sale_doc_no, d.sale_document_id,
+                  COALESCE(c.name, d.customer_name) AS customer_display, c.customer_code,
+                  (SELECT count(*) FROM customer_deposit_items x WHERE x.deposit_id = d.deposit_id) AS line_count,
+                  (SELECT sum(x.qty_base - x.qty_delivered_base - x.qty_cancelled_base)::bigint
+                     FROM customer_deposit_items x WHERE x.deposit_id = d.deposit_id) AS qty_remaining_base,
+                  (SELECT sum(x.qty_base)::bigint FROM customer_deposit_items x WHERE x.deposit_id = d.deposit_id) AS qty_total_base
+           FROM customer_deposits d JOIN warehouses w USING (warehouse_id)
+           JOIN stock_documents s ON s.document_id = d.sale_document_id
+           LEFT JOIN customers c ON c.customer_id = d.customer_id
+           WHERE d.warehouse_id = ANY(%(whs)s)
+             AND (%(st)s::text IS NULL OR d.status = %(st)s)
+             AND (NOT %(open)s OR d.status IN ('OPEN','PARTIAL'))
+             AND (%(cid)s::bigint IS NULL OR d.customer_id = %(cid)s)
+             AND (%(like)s::text IS NULL OR lower(d.deposit_no) LIKE %(like)s OR lower(s.doc_no) LIKE %(like)s
+                  OR lower(COALESCE(c.name, d.customer_name, '')) LIKE %(like)s OR lower(COALESCE(c.customer_code,'')) LIKE %(like)s)
+           ORDER BY (d.status IN ('OPEN','PARTIAL')) DESC, d.deposit_id DESC LIMIT %(limit)s OFFSET %(offset)s""",
+        {"whs": whs, "st": status, "open": open_only, "cid": customer_id, "like": like, "limit": limit,
+         "offset": offset}).fetchall()
+
+
+@app.get("/api/deposits/{deposit_id}")
+def get_deposit(deposit_id: int, u=Depends(current_user), conn=Depends(get_conn)):
+    d = deposits.detail(conn, deposit_id)
+    if not d:
+        raise engine.NotFound("ไม่พบใบฝากสินค้า")
+    require_wh(u, d["warehouse_id"], "can_view")
+    return d
+
+
+@app.post("/api/deposits", status_code=201)
+def create_deposit(body: DepositIn, idempotency_key: Optional[str] = Header(None),
+                   u=Depends(current_user), conn=Depends(get_conn)):
+    s = conn.execute("SELECT warehouse_id FROM stock_documents WHERE document_id=%s", (body.sale_document_id,)).fetchone()
+    if not s:
+        raise engine.NotFound("ไม่พบบิลขาย")
+    require_doc_write(u, "SALE", s["warehouse_id"])
+    payload = body.model_dump(mode="json")
+    did, replayed = engine.run_idempotent(
+        conn, idempotency_key, u["user_id"], "CREATE_DEPOSIT", _hash(payload),
+        lambda: deposits.create_deposit(conn, body.sale_document_id, payload["items"], u["user_id"], body.deposit_date,
+                                        body.due_date, body.remark, body.customer_name))
+    return {"deposit_id": did, "replayed": replayed, "deposit": deposits.detail(conn, did)}
+
+
+@app.post("/api/deposits/{deposit_id}/deliver")
+def deliver_deposit(deposit_id: int, body: DeliverIn, idempotency_key: Optional[str] = Header(None),
+                    u=Depends(current_user), conn=Depends(get_conn)):
+    _deposit_for_action(conn, u, deposit_id)
+    payload = body.model_dump(mode="json")
+    dl, replayed = engine.run_idempotent(
+        conn, idempotency_key, u["user_id"], "DELIVER_DEPOSIT", _hash({"id": deposit_id, **payload}),
+        lambda: deposits.deliver(conn, deposit_id, payload["lines"], u["user_id"], body.delivery_date, body.remark))
+    return {"delivery_id": dl, "replayed": replayed, "deposit": deposits.detail(conn, deposit_id)}
+
+
+@app.post("/api/deposits/{deposit_id}/cancel")
+def cancel_deposit(deposit_id: int, body: DepositCancelIn, u=Depends(current_user), conn=Depends(get_conn)):
+    require_role(u, "MANAGER")
+    _deposit_for_action(conn, u, deposit_id)
+    res = deposits.cancel(conn, deposit_id, u["user_id"], body.reason, body.return_to_stock)
+    return {**res, "deposit": deposits.detail(conn, deposit_id)}
+
+
+# ------------------------------------------------------------------ bill scanning (AI)
+
+
+@app.get("/api/bill-scan/status")
+def bill_scan_status(u=Depends(current_user)):
+    return {"configured": billscan.api_key() is not None, "model": billscan.model()}
+
+
+@app.post("/api/bill-scan", status_code=201)
+def bill_scan(file: UploadFile = File(...), u=Depends(current_user), conn=Depends(get_conn)):
+    if u["role_code"] == "VIEWER":
+        raise Forbidden("บัญชีนี้ดูข้อมูลได้อย่างเดียว")
+    data = file.file.read(billscan.MAX_IMAGE_BYTES + 1)
+    if len(data) > billscan.MAX_IMAGE_BYTES:
+        raise billscan.BadImage("รูปใหญ่เกิน 10 MB", code_hint="IMAGE_TOO_LARGE")
+    mime = billscan.sniff_image(data)
+    path, sha = billscan.save_image(data, mime)
+    prev = conn.execute("SELECT scan_id, document_id FROM bill_scans WHERE file_sha256=%s AND document_id IS NOT NULL "
+                        "ORDER BY scan_id DESC LIMIT 1", (sha,)).fetchone()
+    try:
+        ai = billscan.call_ai(data, mime)
+    except StockError as e:
+        conn.execute("""INSERT INTO bill_scans (file_path, file_sha256, mime_type, ai_model, status, error_message, created_by)
+                        VALUES (%s,%s,%s,%s,'FAILED',%s,%s)""", (path, sha, mime, billscan.model(), e.message, u["user_id"]))
+        raise
+
+    def can_use(wid: int) -> bool:
+        try:
+            require_doc_write(u, "SALE", wid)
+            return True
+        except StockError:
+            return False
+
+    draft = billscan.build_draft(conn, ai, can_use)
+    if prev:
+        doc = conn.execute("SELECT doc_no FROM stock_documents WHERE document_id=%s", (prev["document_id"],)).fetchone()
+        draft["warnings"].insert(0, {"code": "IMAGE_ALREADY_USED", "document_id": prev["document_id"],
+                                     "doc_no": doc["doc_no"] if doc else ""})
+    with conn.transaction():
+        sid = conn.execute(
+            """INSERT INTO bill_scans (file_path, file_sha256, mime_type, ai_model, ai_result, created_by)
+               VALUES (%s,%s,%s,%s,%s,%s) RETURNING scan_id""",
+            (path, sha, mime, billscan.model(), Jsonb(ai), u["user_id"])).fetchone()["scan_id"]
+        audit(conn.cursor(), u["user_id"], "BILL_SCAN", "bill_scan", sid, None,
+              new={"doc_no": draft["doc_no"], "lines": len(draft["items"])})
+    return {"scan_id": sid, "draft": draft}
+
+
+@app.get("/api/bill-scans/{scan_id}/image")
+def bill_scan_image(scan_id: int, u=Depends(current_user), conn=Depends(get_conn)):
+    s = conn.execute("""SELECT b.*, d.warehouse_id FROM bill_scans b LEFT JOIN stock_documents d USING (document_id)
+                        WHERE b.scan_id=%s""", (scan_id,)).fetchone()
+    if not s:
+        raise engine.NotFound("ไม่พบรูปบิล")
+    if s["warehouse_id"] is not None:
+        require_wh(u, s["warehouse_id"], "can_view")
+    elif s["created_by"] != u["user_id"] and not is_admin(u):
+        raise Forbidden("ไม่มีสิทธิ์ดูรูปนี้")
+    p = Path(s["file_path"])
+    if not p.is_file():
+        raise engine.NotFound("ไฟล์รูปบิลหายไปจากเซิร์ฟเวอร์")
+    return FileResponse(p, media_type=s["mime_type"], headers={"Cache-Control": "private, max-age=3600"})
+
+
 # ------------------------------------------------------------------ dashboard & reports (Phase 5)
 
 
@@ -1186,7 +1399,7 @@ def get_report(name: str, format: str = "json", lang: str = "th", warehouse_id: 
         cols = reports.REPORTS[name][1]
         return {"name": name, "title": reports.lab(lang, reports.REPORTS[name][0]), "total": total, "truncated": truncated,
                 "columns": [{"key": k, "label": lk, "text": reports.lab(lang, lk), "kind": kd} for k, lk, kd in cols],
-                "labels": {c: reports.lab(lang, c) for c in ("OK", "LOW", "OUT", "FAST", "NORMAL", "SLOW", "DEAD")},
+                "labels": {c: reports.lab(lang, c) for c in ("OK", "LOW", "OUT", "FAST", "NORMAL", "SLOW", "DEAD", "OPEN", "PARTIAL", "COMPLETED", "CANCELLED")},
                 "rows": rows[offset:offset + limit]}
     audit(conn.cursor(), u["user_id"], "EXPORT_REPORT", "report", name, new={"format": format, "filters": desc, "rows": total})
     stamp = date.today().strftime("%Y%m%d")

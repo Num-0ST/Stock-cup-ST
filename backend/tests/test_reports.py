@@ -138,7 +138,7 @@ def test_excel_export_matches_json_and_is_audited(client, shop):
     body = {row[0].value: [c.value for c in row] for row in ws.iter_rows(min_row=5)}
     assert body["P2"][3:] == [310, 20, 290, 3] and body["P1"][5] == 60
     th = load_workbook(io.BytesIO(client.get("/api/reports/stock_balance", params={"format": "xlsx", "lang": "th"}).content)).active
-    assert th["A1"].value == "ยอดคงเหลือสินค้า" and "ใกล้หมด" in {row[6].value for row in th.iter_rows(min_row=5)}
+    assert th["A1"].value == "ยอดคงเหลือสินค้า" and "ใกล้หมด" in {row[8].value for row in th.iter_rows(min_row=5)}
     lo = load_workbook(io.BytesIO(client.get("/api/reports/stock_balance", params={"format": "xlsx", "lang": "lo"}).content)).active
     assert lo["A1"].value == "ຍອດຄົງເຫຼືອສິນຄ້າ"
     assert q("SELECT count(*) n FROM audit_logs WHERE action='EXPORT_REPORT'")[0]["n"] == 3
