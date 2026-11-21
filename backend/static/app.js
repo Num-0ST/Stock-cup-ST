@@ -157,26 +157,47 @@
   function renderShell() {
     const app = document.getElementById('app');
     if (!S.token || !S.me) { app.replaceChildren(loginView()); return; }
-    const links = [
-      ['#/dashboard', 'nav.dashboard'], ['#/stock', 'nav.stock'], ['#/docs', 'nav.docs'], ['#/movements', 'nav.movements'],
-      ['#/products', 'nav.products'], ['#/counts', 'nav.counts'], ['#/masters', 'nav.masters'],
-    ];
-    links.splice(3, 0, ['#/deposits', 'nav.deposits']);
-    if (canScan()) links.splice(3, 0, ['#/scan', 'nav.scan']);
-    links.splice(links.findIndex((l) => l[0] === '#/movements'), 0, ['#/transfers', 'nav.transfers']);
-    if (canImport()) links.splice(links.findIndex((l) => l[0] === '#/transfers'), 0, ['#/import', 'nav.import'], ['#/imports', 'nav.imports']);
-    links.push(['#/reports', 'nav.reports']);
-    if (isAdmin()) links.push(['#/users', 'nav.users']);
+    // [href, label key, icon]; null entries are skipped
+    const groups = [
+      [null, [['#/dashboard', 'nav.dashboard', '📊']]],
+      ['navg.daily', [
+        ['#/stock', 'nav.stock', '📦'], ['#/docs', 'nav.docs', '🧾'],
+        canScan() ? ['#/scan', 'nav.scan', '📷'] : null,
+        ['#/deposits', 'nav.deposits', '🏷️'], ['#/transfers', 'nav.transfers', '🔁'], ['#/counts', 'nav.counts', '✅']]],
+      canImport() ? ['navg.import', [['#/import', 'nav.import', '⬆️'], ['#/imports', 'nav.imports', '🗂️']]] : null,
+      ['navg.reports', [['#/movements', 'nav.movements', '📈'], ['#/reports', 'nav.reports', '📑']]],
+      ['navg.setup', [
+        ['#/products', 'nav.products', '🛒'], ['#/masters', 'nav.masters', '🏬'],
+        isAdmin() ? ['#/users', 'nav.users', '👥'] : null]],
+    ].filter(Boolean);
     const cur = location.hash.split('/')[1] || 'dashboard';
-    app.replaceChildren(
-      h('header', { class: 'top' },
-        h('div', { class: 'brand' }, t('app.title')),
-        h('nav', {}, links.map(([href, key]) => h('a', { href, class: href.split('/')[1] === cur ? 'active' : '' }, t(key)))),
-        h('div', { class: 'right' },
-          langSelect(),
-          h('a', { class: 'who', href: '#/account', title: t('nav.account') }, S.me.full_name + ' · ' + S.me.role_code),
-          h('button', { class: 'link', onclick: logout }, t('btn.logout')))),
-      h('main', { id: 'main' }));
+    const collapsed = (() => { try { return localStorage.getItem('wms_nav_collapsed') === '1'; } catch (_) { return false; } })();
+    const layout = h('div', { class: 'layout' + (collapsed ? ' collapsed' : '') });
+    const closeDrawer = () => layout.classList.remove('open');
+    const side = h('aside', { class: 'side' },
+      h('div', { class: 'side-head' },
+        h('a', { class: 'brand', href: '#/dashboard', title: t('app.title') }, h('span', { class: 'logo' }, '🏭'), h('span', { class: 'txt' }, t('app.title'))),
+        h('button', { class: 'collapse', type: 'button', title: t('nav.collapse'), 'aria-label': t('nav.collapse'), onclick: () => {
+          const c = layout.classList.toggle('collapsed');
+          try { localStorage.setItem('wms_nav_collapsed', c ? '1' : '0'); } catch (_) { /* ignore */ }
+        } }, '«')),
+      h('nav', {}, groups.map(([g, items]) => [
+        g ? h('div', { class: 'group' }, t(g)) : null,
+        items.filter(Boolean).map(([href, key, icon]) => h('a', { href, title: t(key), class: href.split('/')[1] === cur ? 'active' : '', onclick: closeDrawer },
+          h('span', { class: 'ico' }, icon), h('span', { class: 'txt' }, t(key)))),
+      ])),
+      h('div', { class: 'side-foot' },
+        langSelect(),
+        h('div', { class: 'whorow' },
+          h('a', { class: 'who' + (cur === 'account' ? ' active' : ''), href: '#/account', title: t('nav.account'), onclick: closeDrawer },
+            h('span', { class: 'ico' }, '👤'), h('span', { class: 'txt' }, S.me.full_name, h('small', {}, S.me.role_code))),
+          h('button', { class: 'link logout', type: 'button', onclick: logout, title: t('btn.logout'), 'aria-label': t('btn.logout') }, '🚪'))));
+    const topbar = h('header', { class: 'mtop' },
+      h('button', { class: 'burger', type: 'button', 'aria-label': 'Menu', onclick: () => layout.classList.toggle('open') }, '☰'),
+      h('span', { class: 'brand' }, t('app.title')));
+    layout.append(side, h('div', { class: 'backdrop', onclick: closeDrawer }),
+      h('div', { class: 'content' }, topbar, h('main', { id: 'main' })));
+    app.replaceChildren(layout);
   }
 
   function langSelect() {

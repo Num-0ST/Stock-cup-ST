@@ -741,6 +741,7 @@ const I18N = {
 
 /* Bill scanning + customer deposits (ฝากคลัง) */
 Object.assign(I18N.th, {
+  'navg.daily': 'งานประจำวัน', 'navg.import': 'นำเข้าข้อมูล', 'navg.reports': 'ติดตามและรายงาน', 'navg.setup': 'ตั้งค่า', 'nav.collapse': 'ย่อ/ขยายเมนู',
   'scan.engineFree': 'โหมดฟรี: อ่านด้วย OCR บนเซิร์ฟเวอร์ของคุณเอง ไม่มีค่าใช้จ่าย ไม่ต้องใช้อินเทอร์เน็ต เหมาะกับบิลที่พิมพ์จากระบบ ส่วนบิลเขียนมือจะอ่านได้ไม่ค่อยดี ควรตรวจทุกบรรทัด',
   'scan.engineAi': 'อ่านด้วย AI (Claude): แม่นกว่า อ่านลายมือได้ มีค่าใช้จ่ายต่อบิล',
   'scan.ocrMissing': 'ไม่พบโปรแกรม OCR บนเซิร์ฟเวอร์: รัน docker compose up -d --build ใหม่เพื่อติดตั้ง',
@@ -803,6 +804,7 @@ Object.assign(I18N.th, {
   'chk.deposit_deliveries_match': 'ยอดส่งของตรงกับประวัติการส่ง', 'chk.deposit_status_consistent': 'สถานะใบฝากตรงกับยอดคงค้าง',
 });
 Object.assign(I18N.en, {
+  'navg.daily': 'Daily work', 'navg.import': 'Import', 'navg.reports': 'Tracking & reports', 'navg.setup': 'Setup', 'nav.collapse': 'Collapse / expand menu',
   'scan.engineFree': 'Free mode: OCR on your own server — no cost, no internet needed. Good for bills printed by your system; handwriting is read poorly, so check every line.',
   'scan.engineAi': 'AI reading (Claude): more accurate, reads handwriting, costs a little per bill',
   'scan.ocrMissing': 'OCR is not installed on the server: run docker compose up -d --build again',
@@ -865,6 +867,7 @@ Object.assign(I18N.en, {
   'chk.deposit_deliveries_match': 'Delivered quantities match delivery history', 'chk.deposit_status_consistent': 'Deposit status matches what is left',
 });
 Object.assign(I18N.lo, {
+  'navg.daily': 'ວຽກປະຈຳວັນ', 'navg.import': 'ນຳເຂົ້າຂໍ້ມູນ', 'navg.reports': 'ຕິດຕາມ ແລະ ລາຍງານ', 'navg.setup': 'ຕັ້ງຄ່າ', 'nav.collapse': 'ຫຍໍ້/ຂະຫຍາຍເມນູ',
   'scan.engineFree': 'ໂໝດຟຣີ: ອ່ານດ້ວຍ OCR ເທິງເຊີບເວີຂອງທ່ານເອງ ບໍ່ມີຄ່າໃຊ້ຈ່າຍ ບໍ່ຕ້ອງໃຊ້ອິນເຕີເນັດ ເໝາະກັບບິນທີ່ພິມຈາກລະບົບ ບິນຂຽນດ້ວຍມືຈະອ່ານໄດ້ບໍ່ດີ ຄວນກວດທຸກແຖວ',
   'scan.engineAi': 'ອ່ານດ້ວຍ AI (Claude): ແມ່ນກວ່າ ອ່ານລາຍມືໄດ້ ມີຄ່າໃຊ້ຈ່າຍຕໍ່ບິນ',
   'scan.ocrMissing': 'ບໍ່ພົບໂປຣແກຣມ OCR ເທິງເຊີບເວີ: ແລ່ນ docker compose up -d --build ໃໝ່',
