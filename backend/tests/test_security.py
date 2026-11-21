@@ -117,3 +117,10 @@ def test_concurrent_first_start_creates_exactly_one_admin():
     [t.start() for t in th]; [t.join() for t in th]
     assert not errs, errs
     assert q("SELECT count(*) n FROM users")[0]["n"] == 1
+
+
+def test_frontend_is_revalidated_after_updates(client):
+    for path in ("/", "/static/app.js", "/static/style.css"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+    assert client.get("/api/health").headers["cache-control"] == "no-store"

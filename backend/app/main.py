@@ -76,7 +76,10 @@ async def security_headers(request: Request, call_next):
         "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
     if request.url.path.startswith("/api/"):
-        resp.headers["Cache-Control"] = "no-store"
+        resp.headers.setdefault("Cache-Control", "no-store")
+    elif request.url.path == "/" or request.url.path.startswith("/static/"):
+        # always revalidate (cheap 304 via ETag) so a new version shows up right after an update
+        resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 
