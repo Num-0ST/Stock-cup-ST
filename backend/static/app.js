@@ -154,47 +154,74 @@
   const myTransactWhs = () => S.whs.filter((w) => S.me.transact_warehouses.includes(w.warehouse_id));
 
   // ---------------------------------------------------------------- shell
+  function icon(name, cls = '') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', 'i ' + cls);
+    svg.setAttribute('aria-hidden', 'true');
+    svg.innerHTML = (window.ICONS || {})[name] || '';
+    return svg;
+  }
+
+  const navStore = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (_) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* ignore */ } },
+  };
+
   function renderShell() {
     const app = document.getElementById('app');
     if (!S.token || !S.me) { app.replaceChildren(loginView()); return; }
-    // [href, label key, icon]; null entries are skipped
+    // groups: [id, label key, icon, items]; an item is [href, label key, icon]
     const groups = [
-      [null, [['#/dashboard', 'nav.dashboard', '📊']]],
-      ['navg.daily', [
-        ['#/stock', 'nav.stock', '📦'], ['#/docs', 'nav.docs', '🧾'],
-        canScan() ? ['#/scan', 'nav.scan', '📷'] : null,
-        ['#/deposits', 'nav.deposits', '🏷️'], ['#/transfers', 'nav.transfers', '🔁'], ['#/counts', 'nav.counts', '✅']]],
-      canImport() ? ['navg.import', [['#/import', 'nav.import', '⬆️'], ['#/imports', 'nav.imports', '🗂️']]] : null,
-      ['navg.reports', [['#/movements', 'nav.movements', '📈'], ['#/reports', 'nav.reports', '📑']]],
-      ['navg.setup', [
-        ['#/products', 'nav.products', '🛒'], ['#/masters', 'nav.masters', '🏬'],
-        isAdmin() ? ['#/users', 'nav.users', '👥'] : null]],
-    ].filter(Boolean);
+      ['daily', 'navg.daily', 'daily', [
+        ['#/stock', 'nav.stock', 'stock'], ['#/docs', 'nav.docs', 'docs'],
+        canScan() ? ['#/scan', 'nav.scan', 'scan'] : null,
+        ['#/deposits', 'nav.deposits', 'deposits'], ['#/transfers', 'nav.transfers', 'transfers'], ['#/counts', 'nav.counts', 'counts']]],
+      canImport() ? ['import', 'navg.import', 'importg', [['#/import', 'nav.import', 'import'], ['#/imports', 'nav.imports', 'imports']]] : null,
+      ['reports', 'navg.reports', 'reportsg', [['#/movements', 'nav.movements', 'movements'], ['#/reports', 'nav.reports', 'reports']]],
+      ['setup', 'navg.setup', 'setup', [
+        ['#/products', 'nav.products', 'products'], ['#/masters', 'nav.masters', 'masters'],
+        isAdmin() ? ['#/users', 'nav.users', 'users'] : null]],
+    ].filter(Boolean).map(([id, label, ic, items]) => [id, label, ic, items.filter(Boolean)]);
     const cur = location.hash.split('/')[1] || 'dashboard';
-    const collapsed = (() => { try { return localStorage.getItem('wms_nav_collapsed') === '1'; } catch (_) { return false; } })();
-    const layout = h('div', { class: 'layout' + (collapsed ? ' collapsed' : '') });
+    const isCur = (href) => href.split('/')[1] === cur;
+    let openSet;
+    try { openSet = new Set(JSON.parse(navStore.get('wms_nav_open', '["daily"]'))); } catch (_) { openSet = new Set(['daily']); }
+    const layout = h('div', { class: 'layout' + (navStore.get('wms_nav_collapsed', '0') === '1' ? ' collapsed' : '') });
     const closeDrawer = () => layout.classList.remove('open');
+    const link = ([href, key, ic], sub) => h('a', { href, title: t(key), class: (sub ? 'sub' : 'item') + (isCur(href) ? ' active' : ''), onclick: closeDrawer },
+      icon(ic), h('span', { class: 'txt' }, t(key)));
+    const groupEl = ([id, label, ic, items]) => {
+      const open = openSet.has(id) || items.some(([href]) => isCur(href));
+      const box = h('div', { class: 'grp' + (open ? ' open' : '') + (items.some(([href]) => isCur(href)) ? ' has-active' : '') });
+      box.append(
+        h('button', { type: 'button', class: 'grp-head', title: t(label), 'aria-expanded': String(open), onclick: (e) => {
+          const o = box.classList.toggle('open');
+          e.currentTarget.setAttribute('aria-expanded', String(o));
+          if (o) openSet.add(id); else openSet.delete(id);
+          navStore.set('wms_nav_open', JSON.stringify([...openSet]));
+        } }, icon(ic), h('span', { class: 'txt' }, t(label)), icon('chevron', 'chev')),
+        h('div', { class: 'grp-items' }, items.map((it) => link(it, true))));
+      return box;
+    };
     const side = h('aside', { class: 'side' },
-      h('div', { class: 'side-head' },
-        h('a', { class: 'brand', href: '#/dashboard', title: t('app.title') }, h('span', { class: 'logo' }, '🏭'), h('span', { class: 'txt' }, t('app.title'))),
+      h('div', { class: 'side-brand' },
+        h('a', { class: 'brand', href: '#/dashboard', title: t('app.title') }, h('span', { class: 'logo' }, 'ST'), h('span', { class: 'txt' }, t('app.short')))),
+      h('div', { class: 'side-user' },
+        h('a', { class: 'avatar', href: '#/account', title: t('nav.account'), onclick: closeDrawer }, icon('user')),
+        h('div', { class: 'txt' }, h('a', { href: '#/account', onclick: closeDrawer }, S.me.full_name), h('small', {}, '● ' + S.me.role_code))),
+      h('div', { class: 'side-label' }, t('nav.mainMenu')),
+      h('nav', {}, link(['#/dashboard', 'nav.dashboard', 'dashboard'], false), groups.map(groupEl)),
+      h('div', { class: 'side-foot' },
+        h('label', { class: 'langbox', title: 'Language' }, icon('lang'), langSelect()),
+        h('button', { class: 'logout', type: 'button', onclick: logout, title: t('btn.logout') }, icon('logout'), h('span', { class: 'txt' }, t('btn.logout'))),
         h('button', { class: 'collapse', type: 'button', title: t('nav.collapse'), 'aria-label': t('nav.collapse'), onclick: () => {
           const c = layout.classList.toggle('collapsed');
-          try { localStorage.setItem('wms_nav_collapsed', c ? '1' : '0'); } catch (_) { /* ignore */ }
-        } }, '«')),
-      h('nav', {}, groups.map(([g, items]) => [
-        g ? h('div', { class: 'group' }, t(g)) : null,
-        items.filter(Boolean).map(([href, key, icon]) => h('a', { href, title: t(key), class: href.split('/')[1] === cur ? 'active' : '', onclick: closeDrawer },
-          h('span', { class: 'ico' }, icon), h('span', { class: 'txt' }, t(key)))),
-      ])),
-      h('div', { class: 'side-foot' },
-        langSelect(),
-        h('div', { class: 'whorow' },
-          h('a', { class: 'who' + (cur === 'account' ? ' active' : ''), href: '#/account', title: t('nav.account'), onclick: closeDrawer },
-            h('span', { class: 'ico' }, '👤'), h('span', { class: 'txt' }, S.me.full_name, h('small', {}, S.me.role_code))),
-          h('button', { class: 'link logout', type: 'button', onclick: logout, title: t('btn.logout'), 'aria-label': t('btn.logout') }, '🚪'))));
+          navStore.set('wms_nav_collapsed', c ? '1' : '0');
+        } }, icon('chevron'))));
     const topbar = h('header', { class: 'mtop' },
-      h('button', { class: 'burger', type: 'button', 'aria-label': 'Menu', onclick: () => layout.classList.toggle('open') }, '☰'),
-      h('span', { class: 'brand' }, t('app.title')));
+      h('button', { class: 'burger', type: 'button', 'aria-label': 'Menu', onclick: () => layout.classList.toggle('open') }, icon('menu')),
+      h('span', { class: 'brand' }, t('app.short')));
     layout.append(side, h('div', { class: 'backdrop', onclick: closeDrawer }),
       h('div', { class: 'content' }, topbar, h('main', { id: 'main' })));
     app.replaceChildren(layout);
