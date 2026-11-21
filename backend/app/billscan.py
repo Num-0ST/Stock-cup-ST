@@ -1,4 +1,4 @@
-"""Read a photo of a sales bill (printed or handwritten) with Claude vision and turn it into a draft document.
+"""Read a photo of a sales bill and turn it into a draft document: free OCR (billocr.py, default) or Claude vision.
 
 Nothing is posted here: the result is a *draft* the user reviews and corrects on screen before saving.
 Flow: image -> Claude (forced tool call = structured JSON) -> match products / units / customer / warehouse
@@ -39,6 +39,15 @@ class BadImage(StockError):
 
 def api_key() -> str | None:
     return (os.environ.get("ANTHROPIC_API_KEY") or "").strip() or None
+
+
+def engine() -> str:
+    """'tesseract' = free OCR on this server (default); 'claude' = paid AI reading, better for handwriting.
+    BILL_OCR_ENGINE=auto (default) uses Claude only when ANTHROPIC_API_KEY is set."""
+    e = (os.environ.get("BILL_OCR_ENGINE") or "auto").strip().lower()
+    if e in ("tesseract", "claude"):
+        return e
+    return "claude" if api_key() else "tesseract"
 
 
 def model() -> str:
@@ -182,6 +191,12 @@ def _num(v) -> Decimal | None:
     except InvalidOperation:
         return None
     return d if d.is_finite() else None
+
+
+def _qtxt(q: Decimal | None) -> str | None:
+    if q is None:
+        return None
+    return str(int(q)) if q == q.to_integral_value() else format(q.normalize(), "f")
 
 
 def _norm(s: str) -> str:
@@ -328,8 +343,8 @@ def build_draft(conn, ai: dict, can_use_warehouse) -> dict:
         items.append({
             "line": n, "product_id": p["product_id"] if p else None, "product_code": p["product_code"] if p else None,
             "product_name": p["name"] if p else None, "match": match, "unit_code": unit,
-            "qty": str(qty) if qty is not None else None,
-            "deposit_qty": str(dep) if dep not in (None, Decimal(0)) else None,
+            "qty": _qtxt(qty),
+            "deposit_qty": _qtxt(dep) if dep not in (None, Decimal(0)) else None,
             "source": {"code": code_txt or None, "barcode": bc_txt or None, "description": desc or None,
                        "unit": ln.get("unit"), "unit_price": ln.get("unit_price"), "amount": ln.get("amount")},
             "confidence": ln.get("confidence") or "medium", "warnings": w,

@@ -1,7 +1,8 @@
 FROM python:3.13-slim
 WORKDIR /srv
-# fonts for PDF export (Latin + Thai + Lao)
+# fonts for PDF export (Latin + Thai + Lao) + free OCR for bill scanning (Thai / Lao / English)
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-tlwg-loma-ttf fonts-lao \
+       tesseract-ocr tesseract-ocr-tha tesseract-ocr-lao tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

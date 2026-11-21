@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import billscan, deposits, engine, importer, readers, reports, transfers
+from . import billocr, billscan, deposits, engine, importer, readers, reports, transfers
 from .migrate import run_migrations
 from .auth import (check_password_policy, decode_token_full, hash_password, make_token, verify_password)
 from .db import close_pool, get_conn, get_pool
@@ -1291,7 +1291,10 @@ def cancel_deposit(deposit_id: int, body: DepositCancelIn, u=Depends(current_use
 
 @app.get("/api/bill-scan/status")
 def bill_scan_status(u=Depends(current_user)):
-    return {"configured": billscan.api_key() is not None, "model": billscan.model()}
+    eng = billscan.engine()
+    ok = billscan.api_key() is not None if eng == "claude" else billocr.tesseract_path() is not None
+    return {"engine": eng, "configured": ok, "free": eng == "tesseract",
+            "model": billscan.model() if eng == "claude" else "tesseract"}
 
 
 @app.post("/api/bill-scan", status_code=201)
@@ -1305,11 +1308,13 @@ def bill_scan(file: UploadFile = File(...), u=Depends(current_user), conn=Depend
     path, sha = billscan.save_image(data, mime)
     prev = conn.execute("SELECT scan_id, document_id FROM bill_scans WHERE file_sha256=%s AND document_id IS NOT NULL "
                         "ORDER BY scan_id DESC LIMIT 1", (sha,)).fetchone()
+    eng = billscan.engine()
+    model_name = billscan.model() if eng == "claude" else "tesseract"
     try:
-        ai = billscan.call_ai(data, mime)
+        ai = billscan.call_ai(data, mime) if eng == "claude" else billocr.read_bill(conn, data)
     except StockError as e:
         conn.execute("""INSERT INTO bill_scans (file_path, file_sha256, mime_type, ai_model, status, error_message, created_by)
-                        VALUES (%s,%s,%s,%s,'FAILED',%s,%s)""", (path, sha, mime, billscan.model(), e.message, u["user_id"]))
+                        VALUES (%s,%s,%s,%s,'FAILED',%s,%s)""", (path, sha, mime, model_name, e.message, u["user_id"]))
         raise
 
     def can_use(wid: int) -> bool:
@@ -1320,6 +1325,8 @@ def bill_scan(file: UploadFile = File(...), u=Depends(current_user), conn=Depend
             return False
 
     draft = billscan.build_draft(conn, ai, can_use)
+    draft["engine"] = eng
+    draft["ocr_text"] = ai.get("ocr_text")
     if prev:
         doc = conn.execute("SELECT doc_no FROM stock_documents WHERE document_id=%s", (prev["document_id"],)).fetchone()
         draft["warnings"].insert(0, {"code": "IMAGE_ALREADY_USED", "document_id": prev["document_id"],
@@ -1328,7 +1335,7 @@ def bill_scan(file: UploadFile = File(...), u=Depends(current_user), conn=Depend
         sid = conn.execute(
             """INSERT INTO bill_scans (file_path, file_sha256, mime_type, ai_model, ai_result, created_by)
                VALUES (%s,%s,%s,%s,%s,%s) RETURNING scan_id""",
-            (path, sha, mime, billscan.model(), Jsonb(ai), u["user_id"])).fetchone()["scan_id"]
+            (path, sha, mime, model_name, Jsonb(ai), u["user_id"])).fetchone()["scan_id"]
         audit(conn.cursor(), u["user_id"], "BILL_SCAN", "bill_scan", sid, None,
               new={"doc_no": draft["doc_no"], "lines": len(draft["items"])})
     return {"scan_id": sid, "draft": draft}

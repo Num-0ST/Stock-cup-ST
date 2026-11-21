@@ -78,14 +78,18 @@ Existing databases are upgraded automatically on startup (see Deploy).
 
 ## Phase 6 — Bill scanning & customer deposits
 
-**Scan bill (menu: สแกนบิล)** — take a photo of a printed or handwritten sales bill; Claude (vision) reads bill no., date
-(Buddhist years converted), customer, salesman, lines, units and "ฝาก" quantities. The result is matched to products
-(code → product barcode → unit barcode → name similarity), units (ลัง/แพ็ค/ชิ้น/CT/PK/PC …), customer and warehouse
-(salesman code = warehouse code, or the salesman map saved in an import template), then opens as an editable **draft** next to
-the photo with a warning on everything uncertain (low confidence, name match, unknown unit/product, duplicate bill no.,
-photo already used). Nothing touches stock until the user confirms. The photo is kept and can be viewed from the document.
-- Needs `ANTHROPIC_API_KEY` in `.env` (key from console.anthropic.com; roughly 0.1–0.5 THB per bill with the default
-  `BILL_AI_MODEL=claude-sonnet-5-5`). Without a key the page explains how to enable it; everything else works.
+**Scan bill (menu: สแกนบิล)** — take a photo of a sales bill; the system reads bill no., date (Buddhist years converted),
+customer, salesman, lines, units and "ฝาก" quantities, matches them to products (code → product barcode → unit barcode →
+name similarity), units (ลัง/แพ็ค/ชิ้น/CT/PK/PC …), customer and warehouse (salesman code = warehouse code, or the salesman
+map saved in an import template), then opens an editable **draft** next to the photo with a warning on everything uncertain
+(duplicate bill no., photo already used, unknown product/unit, name match). Nothing touches stock until the user confirms.
+Two readers (`BILL_OCR_ENGINE`):
+- **Free (default)** — Tesseract OCR on the server (installed by the Dockerfile; Thai + English, `BILL_OCR_LANGS=tha+lao+eng`
+  for Lao). No cost, no internet. Two passes (Thai+English for names/units, English for codes/numbers), codes matched through
+  look-alike folding (O/0, I/1, S/5 …) against the product / customer / warehouse codes already in the system. Good on printed
+  bills; handwriting is read poorly. The recognised text is shown on the draft.
+- **Claude AI (optional, paid)** — set `ANTHROPIC_API_KEY` (and keep `BILL_OCR_ENGINE=auto`, or `claude`): better on
+  handwriting, roughly 0.1–0.5 THB per bill with `BILL_AI_MODEL=claude-sonnet-5-5`.
 - **Barcode scanning**: on every new document there is a scan box — a USB/Bluetooth barcode scanner (types + Enter) or typing a
   code adds the product (+1 per scan; unit barcodes add that unit). The 📷 button reads a barcode/QR code from a phone photo
   (native BarcodeDetector, else bundled ZXing). The same button on the Documents page searches by bill number.

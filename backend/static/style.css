@@ -156,3 +156,4 @@ input.qty.dep { background: #f3f7ff; }
 .tips { margin: .3rem 0 0 1.1rem; padding: 0; } .tips li { margin: .2rem 0; }
 dialog.imgdlg { width: min(900px, 96vw); }
 button:disabled, button[disabled] { opacity: .5; cursor: not-allowed; }
+.ocrtext { margin-top: .6rem; font-size: .8rem; } .ocrtext pre { white-space: pre-wrap; background: #f6f7f9; padding: .5rem; border-radius: 6px; max-height: 18rem; overflow: auto; }

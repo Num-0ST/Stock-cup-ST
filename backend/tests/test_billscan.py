@@ -42,7 +42,12 @@ def upload(client, data=JPEG, name="bill.jpg"):
     return client.post("/api/bill-scan", files={"file": (name, io.BytesIO(data), "image/jpeg")})
 
 
-def test_not_configured_and_bad_image(client, shop, monkeypatch):
+@pytest.fixture()
+def ai_engine(monkeypatch):
+    monkeypatch.setenv("BILL_OCR_ENGINE", "claude")
+
+
+def test_not_configured_and_bad_image(client, shop, monkeypatch, ai_engine):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert client.get("/api/bill-scan/status").json()["configured"] is False
     r = upload(client)
@@ -52,7 +57,7 @@ def test_not_configured_and_bad_image(client, shop, monkeypatch):
     assert r.status_code == 422 and r.json()["error"]["code"] == "BAD_IMAGE"
 
 
-def test_scan_builds_matched_draft_then_document(client, shop, monkeypatch):
+def test_scan_builds_matched_draft_then_document(client, shop, monkeypatch, ai_engine):
     s = shop
     monkeypatch.setattr(billscan, "call_ai", lambda data, mime: json.loads(json.dumps(AI_RESULT)))
     r = upload(client)
@@ -89,7 +94,7 @@ def test_scan_builds_matched_draft_then_document(client, shop, monkeypatch):
     assert {"IMAGE_ALREADY_USED", "DUPLICATE_DOC"} <= codes
 
 
-def test_credit_note_and_unknown_customer(client, shop, monkeypatch):
+def test_credit_note_and_unknown_customer(client, shop, monkeypatch, ai_engine):
     res = {"doc_no": "CN0003", "doc_date": None, "doc_kind": "SALE", "customer_code": "NEW9", "customer_name": "ร้านใหม่",
            "salesman": "X99", "is_handwritten": False,
            "items": [{"product_code": "P00061", "qty": 5, "unit": "pcs", "deposit_qty": 2, "confidence": "high"}]}
@@ -102,7 +107,7 @@ def test_credit_note_and_unknown_customer(client, shop, monkeypatch):
     assert {"NO_DATE", "CUSTOMER_NOT_FOUND"} <= codes
 
 
-def test_warehouse_suggestion_respects_permissions(client, shop, monkeypatch):
+def test_warehouse_suggestion_respects_permissions(client, shop, monkeypatch, ai_engine):
     from test_stock_engine import make_user
     monkeypatch.setattr(billscan, "call_ai", lambda data, mime: AI_RESULT)
     other = make_user(client, "SALES", [{"warehouse_id": shop["wh"], "can_transact": True}], "seller")
@@ -159,3 +164,68 @@ def test_bill_dates():
     assert [str(p(x)) for x in ("2025-11-20", "2568-11-20", "20/11/2568", "20/11/68", "5.1.2025")] == \
         ["2025-11-20", "2025-11-20", "2025-11-20", "2025-11-20", "2025-01-05"]
     assert p("31/02/2025") is None and p("abc") is None and p(None) is None
+
+
+# ---------------------------------------------------------------- free OCR engine (Tesseract)
+
+LOMA = "/usr/share/fonts/opentype/tlwg/Loma.otf"
+
+
+def _ocr_ready():
+    from app import billocr
+    import os
+    return billocr.tesseract_path() and "tha" in billocr.available_langs() and os.path.exists(LOMA)
+
+
+def make_bill(lines, size=(1100, 900)):
+    from PIL import Image, ImageDraw, ImageFont
+    f = ImageFont.truetype(LOMA, 34)
+    img = Image.new("RGB", size, (250, 248, 240))
+    d = ImageDraw.Draw(img)
+    for n, line in enumerate(lines):
+        d.text((60, 60 + 70 * n), line, font=f, fill=(20, 20, 90))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=88)
+    return buf.getvalue()
+
+
+@pytest.mark.skipif(not _ocr_ready(), reason="tesseract with Thai data not installed")
+def test_free_ocr_reads_printed_bill(client, shop, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("BILL_OCR_ENGINE", raising=False)
+    st = client.get("/api/bill-scan/status").json()
+    assert st["engine"] == "tesseract" and st["free"] is True and st["configured"] is True
+    img = make_bill(["ร้าน ST Cup  บิลเงินสด", "เลขที่ HS6811-0457   วันที่ 20/11/2568",
+                     "ลูกค้า C001 ร้านป้าแดง   พนักงาน VAN03", "",
+                     "P00061 แก้ว 16oz        2 ลัง  (ฝาก 1 ลัง)", "8850001112223 ฝาโดม     1 ลัง",
+                     "X-999 ถุงหิ้ว           5 โหล", "", "รวม 2,450 บาท"], (1100, 760))
+    r = upload(client, img)
+    assert r.status_code == 201, r.text
+    d = r.json()["draft"]
+    assert d["engine"] == "tesseract" and "ร้าน" in d["ocr_text"]
+    assert (d["doc_no"], d["doc_date"], d["doc_type"]) == ("HS6811-0457", "2025-11-20", "SALE")
+    assert d["customer_label"] == "C001 ร้านป้าแดง" and d["warehouse_id"] == shop["van"]
+    got = [(i["product_code"], i["unit_code"], i["qty"], i["deposit_qty"]) for i in d["items"]]
+    assert got[0] == ("P00061", "CT", "2", "1")
+    assert got[1] == ("P00099", "CT", "1", None)
+    assert got[2][0] is None and got[2][2] == "5"
+    assert d["items"][2]["source"]["code"] == "X-999"
+    assert q("SELECT ai_model FROM bill_scans ORDER BY scan_id DESC LIMIT 1")[0]["ai_model"] == "tesseract"
+
+
+def test_free_ocr_unavailable(client, shop, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("TESSERACT_CMD", "/nonexistent/tesseract")
+    assert client.get("/api/bill-scan/status").json()["configured"] is False
+    r = upload(client)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "OCR_UNAVAILABLE"
+
+
+def test_ocr_helpers():
+    from app import billocr
+    assert billocr.skeleton("PO0O61") == billocr.skeleton("P00061") and billocr.skeleton("VANO3") == "VAN03"
+    words = [{"text": t, "left": l, "width": w, "height": 30} for t, l, w in
+             [("ร", 0, 20), ("้", 21, 5), ("าน", 27, 30), ("ป้า", 120, 40)]]
+    assert billocr.join_words(words) == "ร้าน ป้า"
+    m = billocr.QTY_UNIT.search("X-999 ถุงหิ้ว 5 โหล")
+    assert m.group(1) == "5" and m.group(2) == "โหล"

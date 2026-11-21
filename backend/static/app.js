@@ -489,7 +489,8 @@
         ? h('div', { class: 'newdoc-split' }, h('div', {}, form),
           h('div', { class: 'card billside' }, h('h3', {}, t('scan.billImage')), h('img', { src: draft.imageUrl, class: 'billimg zoomable', onclick: (e) => e.target.classList.toggle('zoom') }),
             draft.total_amount != null ? h('p', { class: 'hint' }, t('scan.total') + ': ' + fmtNum(draft.total_amount)) : null,
-            draft.is_handwritten ? h('p', { class: 'hint' }, '✍ ' + t('scan.handwritten')) : null))
+            draft.is_handwritten ? h('p', { class: 'hint' }, '✍ ' + t('scan.handwritten')) : null,
+            draft.ocr_text ? h('details', { class: 'ocrtext' }, h('summary', {}, t('scan.ocrText')), h('pre', {}, draft.ocr_text)) : null))
         : form);
     renderLines();
     if (!draft) scanInput.focus();
@@ -1418,9 +1419,10 @@
     const V = viewFor();
     const st = await api('/bill-scan/status');
     let file = null, url = null;
+    const reading = () => (st.free ? t('scan.readingFree') : t('scan.reading'));
     const preview = h('div', { class: 'scanprev' });
     const status = h('p', { class: 'hint' });
-    const readBtn = h('button', { class: 'primary', disabled: true, onclick: read }, '🔍 ' + t('scan.read'));
+    const readBtn = h('button', { class: 'primary', disabled: true, onclick: read }, '🔍 ' + (st.free ? t('scan.readFree') : t('scan.read')));
     async function onFile(e) {
       const f = e.target.files[0]; e.target.value = '';
       if (!f) return;
@@ -1434,7 +1436,7 @@
     async function read() {
       if (!file) return;
       readBtn.disabled = true;
-      status.textContent = t('scan.reading');
+      status.textContent = reading();
       const fd = new FormData();
       fd.append('file', file, 'bill.jpg');
       try {
@@ -1447,7 +1449,8 @@
       } catch (e) { fail(e); readBtn.disabled = false; status.textContent = ''; }
     }
     V(h('h2', {}, t('nav.scan')),
-      st.configured ? null : h('p', { class: 'banner warn' }, t('scan.notConfigured')),
+      st.configured ? h('p', { class: 'banner ' + (st.free ? 'ok' : 'ok') }, st.free ? t('scan.engineFree') : t('scan.engineAi'))
+        : h('p', { class: 'banner warn' }, st.engine === 'claude' ? t('scan.notConfigured') : t('scan.ocrMissing')),
       h('p', { class: 'hint' }, t('scan.hint')),
       h('div', { class: 'actions' },
         h('label', { class: 'btn primary' }, '📷 ' + t('scan.takePhoto'), h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, onchange: onFile })),
