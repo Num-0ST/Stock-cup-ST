@@ -104,3 +104,12 @@ Two readers (`BILL_OCR_ENGINE`):
 - Stock page shows *Available* (sellable), *Customer deposits* and *In warehouse* (= both). **Stock counts count everything on the
   shelf including deposits**; the system subtracts open deposits before adjusting.
 - Report "ของฝากลูกค้า" (Excel/PDF), dashboard card, and 4 new integrity checks.
+
+### Document lines from Excel
+On every new document (e.g. an opening-balance receipt with 200-300 items) the button **นำเข้ารายการจาก Excel** reads an
+.xlsx / .xls / .csv file and fills the lines: product by code, barcode, unit barcode or exact name; quantity; optional unit
+(PC/PK/CT or ชิ้น/แพ็ค/ลัง), or separate ลัง / แพ็ค / ชิ้น columns (summed to pieces). Headers are found automatically
+(Thai / Lao / English, title rows above are fine); without headers the columns are guessed. Duplicate codes are merged,
+empty / 0 rows skipped, and rows that cannot be used (unknown product, bad quantity, unit not set up) are listed with their
+row numbers. "ดาวน์โหลดแบบฟอร์ม" gives an .xlsx with every product code and name to fill in. Nothing is saved until the
+user saves the document.

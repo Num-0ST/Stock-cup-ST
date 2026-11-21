@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import billocr, billscan, deposits, engine, importer, readers, reports, transfers
+from . import billocr, billscan, deposits, linefile, engine, importer, readers, reports, transfers
 from .migrate import run_migrations
 from .auth import (check_password_policy, decode_token_full, hash_password, make_token, verify_password)
 from .db import close_pool, get_conn, get_pool
@@ -1170,6 +1170,25 @@ def cancel_transfer(transfer_id: int, body: CancelIn, idempotency_key: Optional[
                                           _hash({"id": transfer_id, "r": body.reason}),
                                           lambda: transfers.cancel_transfer(conn, transfer_id, u["user_id"], body.reason))
     return {"transfer_id": tid, "replayed": replayed, "transfer": transfer_detail(conn, tid)}
+
+
+# ------------------------------------------------------------------ document lines from Excel
+
+
+@app.post("/api/document-lines/parse")
+def parse_document_lines(file: UploadFile = File(...), u=Depends(current_user), conn=Depends(get_conn)):
+    """Read product + quantity rows from an Excel/CSV file for the new-document form. Saves nothing."""
+    if u["role_code"] == "VIEWER":
+        raise Forbidden("บัญชีนี้ดูข้อมูลได้อย่างเดียว")
+    data = file.file.read(linefile.MAX_BYTES + 1)
+    return linefile.parse(conn, data, file.filename or "")
+
+
+@app.get("/api/document-lines/template")
+def document_line_template(with_products: bool = True, u=Depends(current_user), conn=Depends(get_conn)):
+    data = linefile.template(conn, with_products)
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="items-template.xlsx"'})
 
 
 # ------------------------------------------------------------------ customer deposits (ฝากคลัง)

@@ -411,9 +411,11 @@
       if (!lines.length) lines = [blank()];
     }
     const body = h('tbody');
+    const lineCount = h('span', { class: 'hint' });
     let busy = false;
 
     function renderLines() {
+      lineCount.textContent = t('xl.count', { n: lines.filter((l) => l.product).length });
       body.replaceChildren(...lines.map((ln, idx) => {
         const dl = 'dl' + idx;
         const unitOpts = ln.product ? [['PC', 'PC'], ...ln.product.conversions.map((c) => [c.unit_code, `${c.unit_code} (×${c.factor_to_base})`])] : [['PC', 'PC']];
@@ -468,6 +470,40 @@
       renderLines();
       toast(`+1 ${r.unit_code} ${r.product.product_code} — ${r.product.name}`);
     }
+    // ---- fill lines from an Excel / CSV file (e.g. 200-300 opening-balance items)
+    const fileReport = h('div');
+    async function importLines(e) {
+      const f = e.target.files[0]; e.target.value = '';
+      if (!f) return;
+      const fd = new FormData();
+      fd.append('file', f, f.name);
+      toast(t('xl.reading'));
+      let r;
+      try { r = await api('/document-lines/parse', { method: 'POST', form: fd }); } catch (err) { fail(err); return; }
+      const kept = lines.filter((l) => l.product || l.qty);
+      const added = r.lines.map((x) => ({ ...blank(), product: x.product, unit_code: x.unit_code, qty: x.qty }));
+      lines = [...kept, ...added];
+      if (!lines.length) lines = [blank()];
+      renderLines();
+      const problems = [
+        ...r.unmatched.map((u) => [u.row, t('xl.notFound', { code: [u.code, u.name].filter(Boolean).join(' '), qty: u.qty })]),
+        ...r.errors.map((x) => [x.row, t('xl.e.' + x.code, x)]),
+      ].sort((a, b) => a[0] - b[0]);
+      fileReport.replaceChildren(h('div', { class: 'banner ' + (problems.length ? 'warn' : 'ok') + ' xlreport' },
+        h('b', {}, '📥 ' + f.name + ': '),
+        t('xl.summary', { n: r.lines.length, sheet: r.sheet }),
+        r.merged ? ' · ' + t('xl.merged', { n: r.merged }) : '',
+        r.skipped_empty ? ' · ' + t('xl.skipped', { n: r.skipped_empty }) : '',
+        problems.length ? h('details', { open: problems.length <= 10 },
+          h('summary', {}, t('xl.problems', { n: problems.length })),
+          h('ul', {}, problems.map(([row, msg]) => h('li', {}, t('xl.row', { row }) + ': ' + msg)))) : null,
+        h('button', { type: 'button', class: 'link', onclick: () => fileReport.replaceChildren() }, '✕')));
+      toast(t('xl.done', { n: r.lines.length }), problems.length ? 'err' : undefined);
+    }
+    const xlBar = h('div', { class: 'xlbar' },
+      h('label', { class: 'btn' }, '📥 ' + t('xl.import'), h('input', { type: 'file', accept: '.xlsx,.xls,.csv,.htm,.html', hidden: true, onchange: importLines })),
+      h('button', { type: 'button', class: 'link', onclick: () => downloadFile('/document-lines/template', { with_products: true }, 'items-template.xlsx') }, t('xl.template')),
+      h('span', { class: 'hint' }, t('xl.hint')));
     const scanInput = h('input', { type: 'text', class: 'scaninput', placeholder: t('scan.inputPh'), autocomplete: 'off',
       onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); e.target.value = ''; addByCode(v); } } });
 
@@ -519,6 +555,7 @@
         field(t('lbl.docNoAuto'), h('input', { type: 'text', maxlength: 50, value: state.doc_no, oninput: (e) => { state.doc_no = e.target.value; } })),
         partyKind ? field(partyKind === 'customer' ? t('lbl.customer') : t('lbl.supplier'), partyBox) : null,
         field(t('lbl.remark'), h('input', { type: 'text', value: state.remark, oninput: (e) => { state.remark = e.target.value; } }), 'wide')),
+      xlBar, fileReport,
       h('div', { class: 'scanbar' }, h('span', {}, '🔎'), scanInput, barcodeCameraButton(addByCode)),
       h('div', { class: 'tablewrap' },
         h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), h('th', {}, t('lbl.unit')), h('th', { class: 'num' }, t('lbl.qty')),
@@ -526,6 +563,11 @@
       isSale ? h('p', { class: 'hint' }, t('dep.lineHint')) : null,
       h('div', { class: 'actions' },
         h('button', { type: 'button', onclick: () => { lines.push(blank()); renderLines(); } }, '+ ' + t('btn.addLine')),
+        h('button', { type: 'button', class: 'link danger-link', onclick: () => {
+          if (lines.length > 1 && !confirm(t('xl.confirmClear', { n: lines.length }))) return;
+          lines = [blank()]; fileReport.replaceChildren(); renderLines();
+        } }, t('xl.clear')),
+        lineCount,
         h('span', { class: 'spacer' }),
         h('button', { type: 'button', onclick: () => submit(false) }, t('btn.saveDraft')),
         h('button', { type: 'button', class: 'primary', onclick: () => submit(true) }, t('btn.savePost'))),

@@ -225,3 +225,9 @@ input.qty.dep { background: #f3f7ff; }
 dialog.imgdlg { width: min(900px, 96vw); }
 button:disabled, button[disabled] { opacity: .5; cursor: not-allowed; }
 .ocrtext { margin-top: .6rem; font-size: .8rem; } .ocrtext pre { white-space: pre-wrap; background: #f6f7f9; padding: .5rem; border-radius: 6px; max-height: 18rem; overflow: auto; }
+.xlbar { display: flex; gap: .7rem; align-items: center; flex-wrap: wrap; margin: .8rem 0 .2rem; }
+.xlbar .hint { font-size: .8rem; color: var(--muted); }
+.xlreport { position: relative; padding-right: 2rem; }
+.xlreport details { margin-top: .35rem; } .xlreport ul { margin: .3rem 0 0 1.1rem; padding: 0; max-height: 14rem; overflow: auto; }
+.xlreport > button.link { position: absolute; right: .6rem; top: .5rem; }
+button.link.danger-link { color: var(--danger); }

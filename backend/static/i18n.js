@@ -741,6 +741,17 @@ const I18N = {
 
 /* Bill scanning + customer deposits (ฝากคลัง) */
 Object.assign(I18N.th, {
+  'xl.clear': 'ล้างรายการทั้งหมด', 'xl.confirmClear': 'ลบรายการทั้งหมด {n} รายการ?', 'xl.count': 'รวม {n} รายการ',
+  'xl.import': 'นำเข้ารายการจาก Excel', 'xl.template': 'ดาวน์โหลดแบบฟอร์ม (มีรายชื่อสินค้าทั้งหมด)',
+  'xl.hint': 'ไฟล์ต้องมีคอลัมน์ รหัสสินค้า (หรือบาร์โค้ด/ชื่อ) และ จำนวน ส่วนหน่วยใส่หรือไม่ใส่ก็ได้',
+  'xl.reading': 'กำลังอ่านไฟล์…', 'xl.done': 'เพิ่ม {n} รายการจากไฟล์แล้ว ตรวจสอบก่อนบันทึก',
+  'xl.summary': 'เพิ่มได้ {n} รายการ (ชีต {sheet})', 'xl.merged': 'รวมรหัสซ้ำ {n} รายการ', 'xl.skipped': 'ข้ามแถวที่จำนวนว่าง/0 {n} แถว',
+  'xl.problems': 'แถวที่นำเข้าไม่ได้ {n} แถว (ดูรายละเอียด)', 'xl.row': 'แถว {row}',
+  'xl.notFound': 'ไม่พบสินค้า "{code}" ในระบบ (จำนวน {qty})',
+  'xl.e.BAD_QTY': 'จำนวน "{value}" ไม่ใช่ตัวเลข ({product})', 'xl.e.NEGATIVE_QTY': 'จำนวนติดลบ ({product})',
+  'xl.e.UNKNOWN_UNIT': 'ไม่รู้จักหน่วย "{unit}" ({product})', 'xl.e.UNIT_NOT_SET': 'สินค้า {product} ยังไม่ได้ตั้งหน่วย {unit}',
+  'xl.e.NOT_WHOLE_PC': '{qty} {unit} แปลงเป็นชิ้นไม่ลงตัว ({product})',
+  'err.NO_COLUMNS': 'ไม่พบคอลัมน์รหัสสินค้าและจำนวนในไฟล์', 'err.TOO_MANY_LINES': 'ไฟล์มีรายการมากเกินไป',
   'app.short': 'ระบบคลังสินค้า', 'nav.mainMenu': 'เมนูหลัก',
   'navg.daily': 'งานประจำวัน', 'navg.import': 'นำเข้าข้อมูล', 'navg.reports': 'ติดตามและรายงาน', 'navg.setup': 'ตั้งค่า', 'nav.collapse': 'ย่อ/ขยายเมนู',
   'scan.engineFree': 'โหมดฟรี: อ่านด้วย OCR บนเซิร์ฟเวอร์ของคุณเอง ไม่มีค่าใช้จ่าย ไม่ต้องใช้อินเทอร์เน็ต เหมาะกับบิลที่พิมพ์จากระบบ ส่วนบิลเขียนมือจะอ่านได้ไม่ค่อยดี ควรตรวจทุกบรรทัด',
@@ -805,6 +816,17 @@ Object.assign(I18N.th, {
   'chk.deposit_deliveries_match': 'ยอดส่งของตรงกับประวัติการส่ง', 'chk.deposit_status_consistent': 'สถานะใบฝากตรงกับยอดคงค้าง',
 });
 Object.assign(I18N.en, {
+  'xl.clear': 'Clear all lines', 'xl.confirmClear': 'Remove all {n} lines?', 'xl.count': '{n} lines',
+  'xl.import': 'Import lines from Excel', 'xl.template': 'Download template (all products listed)',
+  'xl.hint': 'The file needs a product code (or barcode / name) column and a quantity column; unit is optional',
+  'xl.reading': 'Reading the file…', 'xl.done': '{n} lines added from the file — check before saving',
+  'xl.summary': '{n} lines added (sheet {sheet})', 'xl.merged': '{n} duplicate codes merged', 'xl.skipped': '{n} rows with empty/0 quantity skipped',
+  'xl.problems': '{n} rows could not be imported (details)', 'xl.row': 'Row {row}',
+  'xl.notFound': 'Product "{code}" not found (qty {qty})',
+  'xl.e.BAD_QTY': 'Quantity "{value}" is not a number ({product})', 'xl.e.NEGATIVE_QTY': 'Negative quantity ({product})',
+  'xl.e.UNKNOWN_UNIT': 'Unknown unit "{unit}" ({product})', 'xl.e.UNIT_NOT_SET': 'Unit {unit} is not set up for {product}',
+  'xl.e.NOT_WHOLE_PC': '{qty} {unit} is not a whole number of pieces ({product})',
+  'err.NO_COLUMNS': 'No product code and quantity columns found in the file', 'err.TOO_MANY_LINES': 'Too many lines in the file',
   'app.short': 'Inventory', 'nav.mainMenu': 'Main menu',
   'navg.daily': 'Daily work', 'navg.import': 'Import', 'navg.reports': 'Tracking & reports', 'navg.setup': 'Setup', 'nav.collapse': 'Collapse / expand menu',
   'scan.engineFree': 'Free mode: OCR on your own server — no cost, no internet needed. Good for bills printed by your system; handwriting is read poorly, so check every line.',
@@ -869,6 +891,17 @@ Object.assign(I18N.en, {
   'chk.deposit_deliveries_match': 'Delivered quantities match delivery history', 'chk.deposit_status_consistent': 'Deposit status matches what is left',
 });
 Object.assign(I18N.lo, {
+  'xl.clear': 'ລ້າງລາຍການທັງໝົດ', 'xl.confirmClear': 'ລຶບລາຍການທັງໝົດ {n} ລາຍການ?', 'xl.count': 'ລວມ {n} ລາຍການ',
+  'xl.import': 'ນຳເຂົ້າລາຍການຈາກ Excel', 'xl.template': 'ດາວໂຫຼດແບບຟອມ (ມີລາຍຊື່ສິນຄ້າທັງໝົດ)',
+  'xl.hint': 'ໄຟລ໌ຕ້ອງມີຖັນ ລະຫັດສິນຄ້າ (ຫຼື ບາໂຄດ/ຊື່) ແລະ ຈຳນວນ ສ່ວນຫົວໜ່ວຍໃສ່ ຫຼື ບໍ່ໃສ່ກໍໄດ້',
+  'xl.reading': 'ກຳລັງອ່ານໄຟລ໌…', 'xl.done': 'ເພີ່ມ {n} ລາຍການຈາກໄຟລ໌ແລ້ວ ກວດສອບກ່ອນບັນທຶກ',
+  'xl.summary': 'ເພີ່ມໄດ້ {n} ລາຍການ (ຊີດ {sheet})', 'xl.merged': 'ລວມລະຫັດຊ້ຳ {n} ລາຍການ', 'xl.skipped': 'ຂ້າມແຖວທີ່ຈຳນວນຫວ່າງ/0 {n} ແຖວ',
+  'xl.problems': 'ແຖວທີ່ນຳເຂົ້າບໍ່ໄດ້ {n} ແຖວ (ເບິ່ງລາຍລະອຽດ)', 'xl.row': 'ແຖວ {row}',
+  'xl.notFound': 'ບໍ່ພົບສິນຄ້າ "{code}" ໃນລະບົບ (ຈຳນວນ {qty})',
+  'xl.e.BAD_QTY': 'ຈຳນວນ "{value}" ບໍ່ແມ່ນຕົວເລກ ({product})', 'xl.e.NEGATIVE_QTY': 'ຈຳນວນຕິດລົບ ({product})',
+  'xl.e.UNKNOWN_UNIT': 'ບໍ່ຮູ້ຈັກຫົວໜ່ວຍ "{unit}" ({product})', 'xl.e.UNIT_NOT_SET': 'ສິນຄ້າ {product} ຍັງບໍ່ໄດ້ຕັ້ງຫົວໜ່ວຍ {unit}',
+  'xl.e.NOT_WHOLE_PC': '{qty} {unit} ແປງເປັນຊິ້ນບໍ່ລົງຕົວ ({product})',
+  'err.NO_COLUMNS': 'ບໍ່ພົບຖັນລະຫັດສິນຄ້າ ແລະ ຈຳນວນໃນໄຟລ໌', 'err.TOO_MANY_LINES': 'ໄຟລ໌ມີລາຍການຫຼາຍເກີນໄປ',
   'app.short': 'ລະບົບສາງ', 'nav.mainMenu': 'ເມນູຫຼັກ',
   'navg.daily': 'ວຽກປະຈຳວັນ', 'navg.import': 'ນຳເຂົ້າຂໍ້ມູນ', 'navg.reports': 'ຕິດຕາມ ແລະ ລາຍງານ', 'navg.setup': 'ຕັ້ງຄ່າ', 'nav.collapse': 'ຫຍໍ້/ຂະຫຍາຍເມນູ',
   'scan.engineFree': 'ໂໝດຟຣີ: ອ່ານດ້ວຍ OCR ເທິງເຊີບເວີຂອງທ່ານເອງ ບໍ່ມີຄ່າໃຊ້ຈ່າຍ ບໍ່ຕ້ອງໃຊ້ອິນເຕີເນັດ ເໝາະກັບບິນທີ່ພິມຈາກລະບົບ ບິນຂຽນດ້ວຍມືຈະອ່ານໄດ້ບໍ່ດີ ຄວນກວດທຸກແຖວ',
