@@ -126,3 +126,13 @@ user saves the document.
 - Size: about 450 MB of database per year at ~250 bills/day after housekeeping. The backup service also runs
   `scripts/maintenance.sh` daily, removing raw Excel rows of imports finished more than `IMPORT_ROWS_KEEP_DAYS`
   (default 180) ago; documents, stock and import summaries are kept.
+
+## Public https link (Cloudflare Tunnel)
+GitHub Pages only hosts static pages; this system needs the API and PostgreSQL, so it is published from the machine
+that runs it through a Cloudflare Tunnel (free, https, no open ports on the router):
+- Quick link (no account, address changes on every restart):
+  `docker compose --profile quick-tunnel up -d` then `docker compose logs quick-tunnel` → `https://<random>.trycloudflare.com`
+- Permanent address on your own domain: create a tunnel in Cloudflare Zero Trust, public hostname → `http://api:8000`,
+  set `TUNNEL_TOKEN` in `.env`, then `docker compose --profile tunnel up -d`.
+Behind the tunnel the visitor's address comes from `CF-Connecting-IP` (only trusted from the Docker network), so login
+throttling keeps working per visitor.

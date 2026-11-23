@@ -60,6 +60,28 @@ services:
       - uploads:/data/uploads:ro
     entrypoint: ["/bin/bash", "/scripts/backup-loop.sh"]
 
+  # ---- public https link through Cloudflare (optional, choose ONE) ---------------------------------
+  # Quick link, no account needed; the address changes every time the tunnel restarts:
+  #   docker compose --profile quick-tunnel up -d     then: docker compose logs quick-tunnel  (look for trycloudflare.com)
+  quick-tunnel:
+    image: cloudflare/cloudflared:2026.11.1
+    profiles: ["quick-tunnel"]
+    restart: unless-stopped
+    depends_on: [api]
+    command: tunnel --no-autoupdate --url http://api:8000
+
+  # Permanent address on your own domain: create a tunnel in the Cloudflare dashboard (Zero Trust -> Networks ->
+  # Tunnels), point its public hostname to http://api:8000, put the token in .env as TUNNEL_TOKEN, then:
+  #   docker compose --profile tunnel up -d
+  tunnel:
+    image: cloudflare/cloudflared:2026.11.1
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    depends_on: [api]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    command: tunnel --no-autoupdate run
+
 volumes:
   pgdata:
   uploads:

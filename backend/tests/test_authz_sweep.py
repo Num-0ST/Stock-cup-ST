@@ -103,3 +103,15 @@ def test_oversized_upload_refused(client):
     r = client.post("/api/document-lines/parse", content=b"x" * 10, headers={"content-length": str(40 * 1024 * 1024),
                                                                            "content-type": "multipart/form-data; boundary=x"})
     assert r.status_code == 413
+
+
+def test_visitor_address_behind_tunnel_only(client):
+    from app.main import _client_ip
+
+    class R:
+        def __init__(self, host, hdr):
+            self.client = type("C", (), {"host": host})()
+            self.headers = hdr
+    assert _client_ip(R("172.18.0.5", {"cf-connecting-ip": "1.2.3.4"})) == "1.2.3.4"      # from the tunnel container
+    assert _client_ip(R("192.168.1.20", {"cf-connecting-ip": "1.2.3.4"})) == "192.168.1.20"  # direct LAN client: ignored
+    assert _client_ip(R("172.18.0.5", {"cf-connecting-ip": "junk"})) == "172.18.0.5"

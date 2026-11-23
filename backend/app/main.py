@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ipaddress
 import os
 from contextlib import asynccontextmanager
 from datetime import date
@@ -302,13 +303,26 @@ class TooManyAttempts(StockError):
     status, code = 429, "ACCOUNT_LOCKED"
 
 
+_DOCKER_NET = ipaddress.ip_network("172.16.0.0/12")
+
+
 def _client_ip(request: Request) -> Optional[str]:
-    import ipaddress
+    """Address of the real visitor. Behind the Cloudflare tunnel every request arrives from the tunnel container
+    (a Docker address), so the visitor's address is taken from CF-Connecting-IP - but only then, never from
+    a client that connects directly."""
     host = request.client.host if request.client else None
     try:
-        return str(ipaddress.ip_address(host)) if host else None
+        peer = ipaddress.ip_address(host) if host else None
     except ValueError:
         return None
+    if peer is not None and peer in _DOCKER_NET:
+        fwd = (request.headers.get("cf-connecting-ip") or "").strip()
+        try:
+            if fwd:
+                return str(ipaddress.ip_address(fwd))
+        except ValueError:
+            pass
+    return str(peer) if peer else None
 
 
 @app.post("/api/auth/login")
