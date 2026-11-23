@@ -64,6 +64,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Multi-Warehouse Inventory", version="0.2.0", lifespan=lifespan)
 
 
+MAX_BODY_BYTES = 30 * 1024 * 1024     # biggest legitimate upload is a 25 MB Excel file
+
+
+@app.middleware("http")
+async def limit_body_size(request: Request, call_next):
+    """Refuse oversized uploads before they are spooled to disk (protects the server's disk and memory)."""
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_BODY_BYTES:
+        return JSONResponse({"error": {"code": "PAYLOAD_TOO_LARGE", "message": "ไฟล์หรือข้อมูลใหญ่เกินไป"}}, status_code=413)
+    if request.method in ("POST", "PUT", "PATCH") and not cl and request.headers.get("transfer-encoding"):
+        return JSONResponse({"error": {"code": "LENGTH_REQUIRED", "message": "ต้องระบุขนาดข้อมูล"}}, status_code=411)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     resp = await call_next(request)
@@ -278,6 +292,10 @@ def health():
 
 MAX_FAILED_LOGINS = 5
 LOCK_MINUTES = 15
+MAX_FAILED_PER_IP = 30          # failed logins from one address within IP_WINDOW_MINUTES (any usernames)
+IP_WINDOW_MINUTES = 15
+# compared against when the username does not exist, so a wrong username takes as long as a wrong password
+_DUMMY_HASH = hash_password("not-a-real-password-0")
 
 
 class TooManyAttempts(StockError):
@@ -296,12 +314,20 @@ def _client_ip(request: Request) -> Optional[str]:
 @app.post("/api/auth/login")
 def login(body: LoginIn, request: Request, conn=Depends(get_conn)):
     ip = _client_ip(request)
+    if ip:
+        n = conn.execute(
+            """SELECT count(*) AS n FROM audit_logs WHERE ip_address=%s AND action IN ('LOGIN_FAILED','ACCOUNT_LOCKED','LOGIN_BLOCKED')
+               AND occurred_at > now() - make_interval(mins => %s)""", (ip, IP_WINDOW_MINUTES)).fetchone()["n"]
+        if n >= MAX_FAILED_PER_IP:
+            raise TooManyAttempts(f"ลองเข้าสู่ระบบผิดหลายครั้งจากเครื่องนี้ กรุณารอ {IP_WINDOW_MINUTES} นาที",
+                                  minutes=IP_WINDOW_MINUTES, code_hint="IP_THROTTLED")
     u = conn.execute("SELECT * FROM users WHERE username=%s", (body.username,)).fetchone()
     if u and u["locked_until"] and u["locked_until"] > conn.execute("SELECT now() AS n").fetchone()["n"]:
         audit(conn.cursor(), u["user_id"], "LOGIN_BLOCKED", "user", u["user_id"], ip=ip)
         raise TooManyAttempts(f"บัญชีถูกล็อกชั่วคราว (ลองผิดหลายครั้ง) กรุณารอ {LOCK_MINUTES} นาที หรือให้ผู้ดูแลปลดล็อก",
                               minutes=LOCK_MINUTES)
-    if not u or not u["is_active"] or not verify_password(body.password, u["password_hash"]):
+    password_ok = verify_password(body.password, u["password_hash"] if u else _DUMMY_HASH)
+    if not u or not u["is_active"] or not password_ok:
         if u:
             # separate autocommit statements so the failure is recorded even though we raise
             row = conn.execute(

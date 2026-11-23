@@ -78,16 +78,23 @@ class ReportError(Exception):
 
 # net sold / returned per ledger row, with reversals netted against the transaction they reverse
 NET_SALES_SQL = """
-    SELECT t.warehouse_id, t.product_id, COALESCE(o.txn_date, t.txn_date) AS txn_date, t.document_id, d.status AS doc_status,
-           CASE WHEN t.txn_type='SALE' THEN t.qty_out
-                WHEN t.txn_type='REVERSAL' AND o.txn_type='SALE' THEN -t.qty_in ELSE 0 END AS sold,
-           CASE WHEN t.txn_type='CUSTOMER_RETURN' THEN t.qty_in
-                WHEN t.txn_type='REVERSAL' AND o.txn_type='CUSTOMER_RETURN' THEN -t.qty_out ELSE 0 END AS returned
-    FROM stock_transactions t LEFT JOIN stock_transactions o ON o.txn_id = t.reverses_txn_id
+    SELECT t.warehouse_id, t.product_id, t.txn_date, t.document_id, d.status AS doc_status,
+           CASE WHEN t.txn_type='SALE' THEN t.qty_out ELSE 0 END AS sold,
+           CASE WHEN t.txn_type='CUSTOMER_RETURN' THEN t.qty_in ELSE 0 END AS returned
+    FROM stock_transactions t LEFT JOIN stock_documents d ON d.document_id = t.document_id
+    WHERE t.warehouse_id = ANY(%(whs)s) AND t.txn_date BETWEEN %(df)s AND %(dto)s
+      AND t.txn_type IN ('SALE','CUSTOMER_RETURN')
+    UNION ALL
+    SELECT t.warehouse_id, t.product_id, o.txn_date, t.document_id, d.status,
+           CASE WHEN o.txn_type='SALE' THEN -t.qty_in ELSE 0 END,
+           CASE WHEN o.txn_type='CUSTOMER_RETURN' THEN -t.qty_out ELSE 0 END
+    FROM stock_transactions t JOIN stock_transactions o ON o.txn_id = t.reverses_txn_id
     LEFT JOIN stock_documents d ON d.document_id = t.document_id
-    WHERE t.warehouse_id = ANY(%(whs)s) AND COALESCE(o.txn_date, t.txn_date) BETWEEN %(df)s AND %(dto)s
-      AND (t.txn_type IN ('SALE','CUSTOMER_RETURN') OR (t.txn_type='REVERSAL' AND o.txn_type IN ('SALE','CUSTOMER_RETURN')))
-"""   # a reversal is booked against the date of the transaction it undoes; docs counted only while still POSTED
+    WHERE t.reverses_txn_id IS NOT NULL AND t.txn_type = 'REVERSAL' AND t.txn_date >= %(df)s
+      AND t.warehouse_id = ANY(%(whs)s)
+      AND o.txn_date BETWEEN %(df)s AND %(dto)s AND o.txn_type IN ('SALE','CUSTOMER_RETURN')
+"""   # a reversal is booked against the date of the transaction it undoes (it is never dated before it);
+      # docs counted only while still POSTED. Two index-friendly parts instead of one COALESCE filter.
 
 
 # customer deposits still waiting for delivery, per warehouse/product (already sold, still physically here)

@@ -238,7 +238,9 @@ CREATE TABLE stock_transactions (
     CHECK ((qty_in > 0 AND qty_out = 0) OR (qty_in = 0 AND qty_out > 0))
 );
 CREATE INDEX ix_st_product_wh_date ON stock_transactions (product_id, warehouse_id, txn_date, txn_id);
-CREATE INDEX ix_st_wh_date        ON stock_transactions (warehouse_id, txn_date);
+CREATE INDEX ix_st_wh_date_cover  ON stock_transactions (warehouse_id, txn_date)
+    INCLUDE (txn_type, product_id, qty_in, qty_out, document_id);              -- reports read it without table visits
+CREATE INDEX ix_st_reversal_date ON stock_transactions (txn_date) WHERE reverses_txn_id IS NOT NULL;
 CREATE INDEX ix_st_document       ON stock_transactions (document_id);
 -- Double-deduction protection: a document line posts at most once; a txn is reversed at most once
 CREATE UNIQUE INDEX uq_st_item_once ON stock_transactions (document_item_id) WHERE document_item_id IS NOT NULL AND reverses_txn_id IS NULL;
@@ -365,6 +367,7 @@ CREATE TABLE audit_logs (
 );
 CREATE INDEX ix_audit_entity ON audit_logs (entity_type, entity_id);
 CREATE INDEX ix_audit_user_time ON audit_logs (user_id, occurred_at DESC);
+CREATE INDEX ix_audit_ip_time ON audit_logs (ip_address, occurred_at DESC) WHERE ip_address IS NOT NULL;
 
 CREATE TABLE idempotency_keys (
     idem_key      VARCHAR(100) PRIMARY KEY,               -- client-generated per action (confirm import, post doc, ...)

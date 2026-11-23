@@ -9,5 +9,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY migrations ./migrations
 COPY app ./app
 COPY static ./static
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# run the API as an unprivileged user (entrypoint drops root after fixing the uploads volume ownership)
+RUN useradd --system --uid 10001 --home-dir /srv --shell /usr/sbin/nologin app \
+    && chmod 0755 /usr/local/bin/entrypoint.sh && mkdir -p /data/uploads && chown app:app /data/uploads
 EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

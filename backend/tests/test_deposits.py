@@ -247,7 +247,7 @@ def test_migrations_upgrade_an_older_database(client):
         c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         c.execute(old.stdout)
     applied = run_migrations()
-    assert applied == ["005_security.sql", "006_deposits_billscan.sql"]
+    assert applied == ["005_security.sql", "006_deposits_billscan.sql", "007_login_throttle.sql", "008_perf_indexes.sql"]
     assert run_migrations() == []
     cols = q("""SELECT column_name FROM information_schema.columns WHERE table_name='stock_document_items'""")
     assert "deposit_qty_base" in {c["column_name"] for c in cols}

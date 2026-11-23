@@ -113,3 +113,16 @@ On every new document (e.g. an opening-balance receipt with 200-300 items) the b
 empty / 0 rows skipped, and rows that cannot be used (unknown product, bad quantity, unit not set up) are listed with their
 row numbers. "ดาวน์โหลดแบบฟอร์ม" gives an .xlsx with every product code and name to fill in. Nothing is saved until the
 user saves the document.
+
+## Security & long-term operation
+- Authorization sweep tests: a user of one warehouse cannot read or change another warehouse's documents, deposits,
+  transfers, counts, bill photos or reports; admin-only endpoints and anonymous access are covered too.
+- Login: 5 wrong passwords lock the account for 15 min; 30 failures from one address in 15 min block that address;
+  unknown usernames take as long as wrong passwords (no username probing). Uploads over 30 MB are refused up front.
+- The API container runs as an unprivileged user; dependencies are pinned and checked with `pip-audit` (Pillow ≥ 13).
+- Use HTTPS (reverse proxy) before exposing the system outside the local network.
+- Measured with 5 years of data (458k bills, 4.2M ledger rows): dashboard 0.06 s, stock 0.01 s, 30-day sales 0.1 s,
+  1-year sales report 1.7 s, full integrity check ~14 s. Indexes in `migrations/008_perf_indexes.sql`.
+- Size: about 450 MB of database per year at ~250 bills/day after housekeeping. The backup service also runs
+  `scripts/maintenance.sh` daily, removing raw Excel rows of imports finished more than `IMPORT_ROWS_KEEP_DAYS`
+  (default 180) ago; documents, stock and import summaries are kept.
