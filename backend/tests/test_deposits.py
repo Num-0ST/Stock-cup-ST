@@ -252,3 +252,24 @@ def test_migrations_upgrade_an_older_database(client):
     cols = q("""SELECT column_name FROM information_schema.columns WHERE table_name='stock_document_items'""")
     assert "deposit_qty_base" in {c["column_name"] for c in cols}
     assert q("SELECT count(*) n FROM customer_deposits")[0]["n"] == 0
+
+
+def test_line_split_by_unit_with_deposit_in_pieces(client, shop):
+    """The form sends one item per unit (2 CT + 1 PK + 3 PC) and spreads the deposit (PC) over them."""
+    s = shop
+    r = sale(s, [{"product_id": s["p1"], "unit_code": "CT", "qty": 2, "deposit_qty_base": 30},
+                 {"product_id": s["p1"], "unit_code": "PK", "qty": 1, "deposit_qty_base": 5},
+                 {"product_id": s["p1"], "unit_code": "PC", "qty": 3}])
+    assert r.status_code == 201, r.text
+    doc = r.json()["document"]
+    assert [i["base_qty"] for i in doc["items"]] == [48, 6, 3]
+    assert doc["deposits"][0]["qty_remaining_base"] == 35
+    assert stock_row(client, s["wh"], s["p1"])["qty_on_hand"] == 100 - 57
+    r = sale(s, [{"product_id": s["p1"], "unit_code": "PK", "qty": 1, "deposit_qty_base": 7}])
+    assert r.status_code == 422 and r.json()["error"]["code_hint"] == "DEPOSIT_EXCEEDS_SALE"
+    av = client.get("/api/stock/available", params={"warehouse_id": s["wh"]}).json()
+    assert av == {str(s["p1"]): 43, str(s["p2"]): 50}
+    other = s["w"].warehouse("VAN03", "Van 3")
+    from test_stock_engine import make_user
+    u = make_user(client, "STOREKEEPER", [{"warehouse_id": other, "can_transact": True}], "keeper")
+    assert u.get("/api/stock/available", params={"warehouse_id": s["wh"]}).status_code == 403

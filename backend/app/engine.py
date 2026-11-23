@@ -184,7 +184,21 @@ def _shortage_error(cur, shortages: list[tuple[int, int, int]], message: str) ->
 
 
 def _deposit_base(item: dict, factor: int, base: Decimal, line_no: int, doc_type: str) -> int:
-    """Part of a sale line the customer leaves in the warehouse (same unit as the line), in PC."""
+    """Part of a sale line the customer leaves in the warehouse, in PC.
+    Given either as deposit_qty (same unit as the line) or directly as deposit_qty_base (PC)."""
+    raw_base = item.get("deposit_qty_base")
+    if raw_base not in (None, "", 0, "0"):
+        if doc_type != "SALE":
+            raise ValidationFailed(f"บรรทัด {line_no}: ฝากคลังได้เฉพาะบิลขาย", line=line_no, code_hint="DEPOSIT_NOT_SALE")
+        try:
+            db = Decimal(str(raw_base))
+        except (InvalidOperation, TypeError):
+            raise ValidationFailed(f"บรรทัด {line_no}: จำนวนฝากไม่ถูกต้อง", line=line_no, code_hint="BAD_QTY")
+        if db < 0 or db != db.to_integral_value():
+            raise ValidationFailed(f"บรรทัด {line_no}: จำนวนฝากต้องเป็นจำนวนเต็มชิ้น", line=line_no, code_hint="BAD_QTY")
+        if db > base:
+            raise ValidationFailed(f"บรรทัด {line_no}: จำนวนฝากมากกว่าจำนวนขาย", line=line_no, code_hint="DEPOSIT_EXCEEDS_SALE")
+        return int(db)
     raw = item.get("deposit_qty")
     if raw in (None, "", 0, "0"):
         return 0

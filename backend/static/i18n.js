@@ -741,6 +741,11 @@ const I18N = {
 
 /* Bill scanning + customer deposits (ฝากคลัง) */
 Object.assign(I18N.th, {
+  'uq.qtyN': 'จำนวนหน่วยที่ {n}', 'uq.unitN': 'หน่วยที่ {n}/อัตรา', 'uq.total': 'รวม (ชิ้น)', 'uq.totalPc': 'รวมทั้งหมด {n} ชิ้น',
+  'uq.items': 'รายการ', 'uq.available': 'คงเหลือในคลัง', 'uq.availableFrom': 'คงเหลือคลังต้นทาง', 'uq.enough': 'พอ', 'uq.short': 'ไม่พอ', 'uq.none': 'ไม่มีสต็อก',
+  'unitname.CT': 'ลัง', 'unitname.PK': 'แพ็ค', 'unitname.PC': 'ชิ้น',
+  'dep.lineHintPc': 'ช่อง "ฝาก (PC)": จำนวนชิ้นที่ลูกค้ายังไม่รับไป ระบบจะสร้างใบฝากให้อัตโนมัติเมื่อยืนยันบิล',
+  'err.DUP_PRODUCT': 'สินค้าซ้ำในเอกสาร',
   'xl.clear': 'ล้างรายการทั้งหมด', 'xl.confirmClear': 'ลบรายการทั้งหมด {n} รายการ?', 'xl.count': 'รวม {n} รายการ',
   'xl.import': 'นำเข้ารายการจาก Excel', 'xl.template': 'ดาวน์โหลดแบบฟอร์ม (มีรายชื่อสินค้าทั้งหมด)',
   'xl.hint': 'ไฟล์ต้องมีคอลัมน์ รหัสสินค้า (หรือบาร์โค้ด/ชื่อ) และ จำนวน ส่วนหน่วยใส่หรือไม่ใส่ก็ได้',
@@ -816,6 +821,11 @@ Object.assign(I18N.th, {
   'chk.deposit_deliveries_match': 'ยอดส่งของตรงกับประวัติการส่ง', 'chk.deposit_status_consistent': 'สถานะใบฝากตรงกับยอดคงค้าง',
 });
 Object.assign(I18N.en, {
+  'uq.qtyN': 'Qty unit {n}', 'uq.unitN': 'Unit {n}/rate', 'uq.total': 'Total (PC)', 'uq.totalPc': 'Total {n} PC',
+  'uq.items': 'Items', 'uq.available': 'In stock', 'uq.availableFrom': 'In stock (from)', 'uq.enough': 'OK', 'uq.short': 'Short', 'uq.none': 'No stock',
+  'unitname.CT': 'CT', 'unitname.PK': 'PK', 'unitname.PC': 'PC',
+  'dep.lineHintPc': '"Deposit (PC)": pieces the customer has not taken yet; a deposit is created automatically when the bill is confirmed.',
+  'err.DUP_PRODUCT': 'Product listed twice',
   'xl.clear': 'Clear all lines', 'xl.confirmClear': 'Remove all {n} lines?', 'xl.count': '{n} lines',
   'xl.import': 'Import lines from Excel', 'xl.template': 'Download template (all products listed)',
   'xl.hint': 'The file needs a product code (or barcode / name) column and a quantity column; unit is optional',
@@ -891,6 +901,11 @@ Object.assign(I18N.en, {
   'chk.deposit_deliveries_match': 'Delivered quantities match delivery history', 'chk.deposit_status_consistent': 'Deposit status matches what is left',
 });
 Object.assign(I18N.lo, {
+  'uq.qtyN': 'ຈຳນວນຫົວໜ່ວຍທີ {n}', 'uq.unitN': 'ຫົວໜ່ວຍທີ {n}/ອັດຕາ', 'uq.total': 'ລວມ (ຊິ້ນ)', 'uq.totalPc': 'ລວມທັງໝົດ {n} ຊິ້ນ',
+  'uq.items': 'ລາຍການ', 'uq.available': 'ຄົງເຫຼືອໃນສາງ', 'uq.availableFrom': 'ຄົງເຫຼືອສາງຕົ້ນທາງ', 'uq.enough': 'ພໍ', 'uq.short': 'ບໍ່ພໍ', 'uq.none': 'ບໍ່ມີສະຕັອກ',
+  'unitname.CT': 'ແກັດ', 'unitname.PK': 'ແພັກ', 'unitname.PC': 'ປ່ອງ',
+  'dep.lineHintPc': 'ຊ່ອງ "ຝາກ (PC)": ຈຳນວນຊິ້ນທີ່ລູກຄ້າຍັງບໍ່ໄດ້ຮັບໄປ ລະບົບຈະສ້າງໃບຝາກໃຫ້ອັດຕະໂນມັດເມື່ອຢືນຢັນບິນ',
+  'err.DUP_PRODUCT': 'ສິນຄ້າຊ້ຳໃນເອກະສານ',
   'xl.clear': 'ລ້າງລາຍການທັງໝົດ', 'xl.confirmClear': 'ລຶບລາຍການທັງໝົດ {n} ລາຍການ?', 'xl.count': 'ລວມ {n} ລາຍການ',
   'xl.import': 'ນຳເຂົ້າລາຍການຈາກ Excel', 'xl.template': 'ດາວໂຫຼດແບບຟອມ (ມີລາຍຊື່ສິນຄ້າທັງໝົດ)',
   'xl.hint': 'ໄຟລ໌ຕ້ອງມີຖັນ ລະຫັດສິນຄ້າ (ຫຼື ບາໂຄດ/ຊື່) ແລະ ຈຳນວນ ສ່ວນຫົວໜ່ວຍໃສ່ ຫຼື ບໍ່ໃສ່ກໍໄດ້',

@@ -231,3 +231,24 @@ button:disabled, button[disabled] { opacity: .5; cursor: not-allowed; }
 .xlreport details { margin-top: .35rem; } .xlreport ul { margin: .3rem 0 0 1.1rem; padding: 0; max-height: 14rem; overflow: auto; }
 .xlreport > button.link { position: absolute; right: .6rem; top: .5rem; }
 button.link.danger-link { color: var(--danger); }
+
+/* multi-unit line entry (unit 1 / 2 / 3) */
+.lines-card { padding: 0; overflow: hidden; }
+.lines-card > .tablewrap, .lines-card .tablewrap { border: 0; border-radius: 0; margin: 0; }
+.lines-head { display: flex; align-items: center; gap: 1rem; padding: .6rem .9rem; background: #f3f4f6; border-bottom: 1px solid var(--line); }
+.lines-head b { font-weight: 600; }
+table.lines th { white-space: nowrap; font-size: .82rem; }
+table.lines td { vertical-align: middle; }
+table.lines td.pcell { min-width: 260px; }
+table.lines input.psearch { width: 100%; min-width: 240px; }
+td.uqcell input.uq { width: 6.2rem; text-align: right; }
+input.uq[disabled] { background: #eef0f3; border-color: #e2e5ea; }
+td.ulabel { white-space: nowrap; color: #374151; font-size: .86rem; }
+td.tot { font-weight: 600; white-space: nowrap; }
+td.avail { white-space: nowrap; }
+.qbs { display: inline-flex; gap: 3px; }
+.qb { display: inline-block; min-width: 1.6rem; text-align: center; padding: .1rem .38rem; border-radius: 4px; background: #3c8dbc; color: #fff; font-size: .75rem; font-weight: 600; }
+.qb.zero { background: #dd4b39; }
+.sb { display: inline-block; padding: .15rem .5rem; border-radius: 4px; font-size: .75rem; font-weight: 600; color: #fff; }
+.sb.ok { background: #00a65a; } .sb.no { background: #dd4b39; }
+table.lines.cnt td.uqcell input.uq { width: 7rem; }

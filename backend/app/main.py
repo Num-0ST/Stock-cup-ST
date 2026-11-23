@@ -179,6 +179,7 @@ class ItemIn(BaseModel):
     unit_code: Optional[str] = None
     qty: Decimal
     deposit_qty: Optional[Decimal] = None      # SALE only: part the customer leaves in the warehouse (same unit)
+    deposit_qty_base: Optional[int] = Field(None, ge=0)   # ... or the same in PC
 
 
 class DocumentIn(BaseModel):
@@ -729,6 +730,15 @@ def delete_document(document_id: int, u=Depends(current_user), conn=Depends(get_
 
 
 # ------------------------------------------------------------------ stock views
+
+
+@app.get("/api/stock/available")
+def stock_available(warehouse_id: int, u=Depends(current_user), conn=Depends(get_conn)):
+    """{product_id: qty_on_hand} for one warehouse - used to show stock next to each line while entering a document."""
+    require_wh(u, warehouse_id, "can_view")
+    rows = conn.execute("SELECT product_id, qty_on_hand FROM stock_balances WHERE warehouse_id=%s AND qty_on_hand <> 0",
+                        (warehouse_id,)).fetchall()
+    return {str(r["product_id"]): r["qty_on_hand"] for r in rows}
 
 
 @app.get("/api/stock/balances")
