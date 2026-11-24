@@ -98,6 +98,8 @@
   let toastTimer;
   function toast(msg, kind = 'ok') {
     const el = document.getElementById('toast');
+    el.setAttribute('role', kind === 'err' ? 'alert' : 'status');
+    el.setAttribute('aria-live', kind === 'err' ? 'assertive' : 'polite');
     el.textContent = msg;
     el.className = 'toast show ' + kind;
     clearTimeout(toastTimer);
@@ -107,18 +109,47 @@
 
   const main = () => document.getElementById('main');
   const present = (nodes) => nodes.flat(Infinity).filter((n) => n != null && n !== false);
-  function view(...nodes) { const m = main(); m.replaceChildren(...present(nodes)); window.scrollTo(0, 0); }
+  /** Turns the leading [back link] + h2 + [hint] + [actions] of a page into one tidy header:
+      title and subtitle on the left, the page's buttons on the right. */
+  function shapePage(nodes) {
+    const list = present(nodes);
+    let i = 0;
+    const crumb = list[0] && list[0].tagName === 'P' && list[0].children.length === 1 && list[0].firstElementChild.tagName === 'A' ? list[i++] : null;
+    if (!list[i] || list[i].tagName !== 'H2') return list;
+    const old = list[i++];
+    const title = h('h1', { class: 'page-title' }); title.append(...old.childNodes);
+    const sub = list[i] && list[i].tagName === 'P' && list[i].classList.contains('hint') ? list[i++] : null;
+    let acts = list[i] && list[i].tagName === 'DIV' && list[i].classList.contains('actions') ? list[i++] : null;
+    // a "create" link sitting in the filter bar belongs in the header
+    const fl = list[i];
+    if (!acts && fl && fl.tagName === 'DIV' && fl.classList.contains('filters')) {
+      const lift = [...fl.children].filter((c) => c.matches('a.btn.primary'));
+      if (lift.length) acts = h('div', {}, lift);
+    }
+    if (crumb) crumb.className = 'crumb';
+    if (sub) sub.className = 'page-sub';
+    if (acts) acts.className = 'ph-actions';
+    const rest = list.slice(i).map((n) => {
+      // on a phone a long filter bar folds away behind one "Filters" button so the list stays in view
+      if (n.tagName !== 'DIV' || !n.classList.contains('filters') || n.querySelectorAll('.field').length < 3) return n;
+      const box = h('details', { class: 'filterbox', open: !window.matchMedia('(max-width: 640px)').matches },
+        h('summary', {}, icon('filter'), t('lbl.filters')), n);
+      return box;
+    });
+    return [h('header', { class: 'page-head' }, h('div', { class: 'ph-main' }, crumb, title, sub), acts), ...rest];
+  }
+  function view(...nodes) { const m = main(); m.replaceChildren(...shapePage(nodes)); window.scrollTo(0, 0); }
   /** For pages that fetch before rendering: ignore the render if the user has navigated away meanwhile
       (route() builds a fresh <main> every time, so a changed element means this page is stale). */
   function viewFor() {
     const el = main();
-    const v = (...nodes) => { if (main() !== el) return; el.replaceChildren(...present(nodes)); window.scrollTo(0, 0); };
+    const v = (...nodes) => { if (main() !== el) return; el.replaceChildren(...shapePage(nodes)); window.scrollTo(0, 0); };
     v.el = el;
     return v;
   }
 
   function table(headers, rows, opts = {}) {
-    if (!rows.length) return h('p', { class: 'empty' }, t('lbl.noData'));
+    if (!rows.length) return h('div', { class: 'empty' }, icon('inbox'), h('span', {}, t('lbl.noData')));
     return h('div', { class: 'tablewrap' },
       h('table', {},
         h('thead', {}, h('tr', {}, headers.map((x) => h('th', { class: x.num ? 'num' : '' }, x.label || x)))),
@@ -189,7 +220,7 @@
     try { openSet = new Set(JSON.parse(navStore.get('wms_nav_open', '["daily"]'))); } catch (_) { openSet = new Set(['daily']); }
     const layout = h('div', { class: 'layout' + (navStore.get('wms_nav_collapsed', '0') === '1' ? ' collapsed' : '') });
     const closeDrawer = () => layout.classList.remove('open');
-    const link = ([href, key, ic], sub) => h('a', { href, title: t(key), class: (sub ? 'sub' : 'item') + (isCur(href) ? ' active' : ''), onclick: closeDrawer },
+    const link = ([href, key, ic], sub) => h('a', { href, title: t(key), class: (sub ? 'sub' : 'item') + (isCur(href) ? ' active' : ''), 'aria-current': isCur(href) ? 'page' : null, onclick: closeDrawer },
       icon(ic), h('span', { class: 'txt' }, t(key)));
     const groupEl = ([id, label, ic, items]) => {
       const open = openSet.has(id) || items.some(([href]) => isCur(href));
@@ -211,19 +242,24 @@
         h('a', { class: 'avatar', href: '#/account', title: t('nav.account'), onclick: closeDrawer }, icon('user')),
         h('div', { class: 'txt' }, h('a', { href: '#/account', onclick: closeDrawer }, S.me.full_name), h('small', {}, '● ' + S.me.role_code))),
       h('div', { class: 'side-label' }, t('nav.mainMenu')),
-      h('nav', {}, link(['#/dashboard', 'nav.dashboard', 'dashboard'], false), groups.map(groupEl)),
+      h('nav', { 'aria-label': t('nav.mainMenu') }, link(['#/dashboard', 'nav.dashboard', 'dashboard'], false), groups.map(groupEl)),
       h('div', { class: 'side-foot' },
         h('label', { class: 'langbox', title: 'Language' }, icon('lang'), langSelect()),
         h('button', { class: 'logout', type: 'button', onclick: logout, title: t('btn.logout') }, icon('logout'), h('span', { class: 'txt' }, t('btn.logout'))),
-        h('button', { class: 'collapse', type: 'button', title: t('nav.collapse'), 'aria-label': t('nav.collapse'), onclick: () => {
+        h('button', { class: 'collapse', type: 'button', title: t('nav.collapse'), 'aria-label': t('nav.collapse'), 'aria-pressed': String(layout.classList.contains('collapsed')), onclick: (e) => {
           const c = layout.classList.toggle('collapsed');
+          e.currentTarget.setAttribute('aria-pressed', String(c));
           navStore.set('wms_nav_collapsed', c ? '1' : '0');
         } }, icon('chevron'))));
     const topbar = h('header', { class: 'mtop' },
-      h('button', { class: 'burger', type: 'button', 'aria-label': 'Menu', onclick: () => layout.classList.toggle('open') }, icon('menu')),
-      h('span', { class: 'brand' }, t('app.short')));
-    layout.append(side, h('div', { class: 'backdrop', onclick: closeDrawer }),
-      h('div', { class: 'content' }, topbar, h('main', { id: 'main' })));
+      h('button', { class: 'burger', type: 'button', 'aria-label': t('nav.menu'), 'aria-expanded': 'false', onclick: (e) => {
+        e.currentTarget.setAttribute('aria-expanded', String(layout.classList.toggle('open')));
+      } }, icon('menu')),
+      h('span', { class: 'brand' }, h('span', { class: 'logo' }, 'ST'), t('app.short')));
+    const skip = h('button', { class: 'skip', type: 'button', onclick: () => { const m = main(); m.focus(); m.scrollIntoView(); } }, t('nav.skip'));
+    layout.addEventListener('keydown', (e) => { if (e.key === 'Escape' && layout.classList.contains('open')) { closeDrawer(); topbar.querySelector('.burger').focus(); } });
+    layout.append(skip, side, h('div', { class: 'backdrop', onclick: closeDrawer }),
+      h('div', { class: 'content' }, topbar, h('main', { id: 'main', tabindex: '-1' })));
     app.replaceChildren(layout);
   }
 
@@ -241,8 +277,8 @@
   function loginView() {
     const u = h('input', { type: 'text', autocomplete: 'username', required: true });
     const p = h('input', { type: 'password', autocomplete: 'current-password', required: true });
-    return h('div', { class: 'login' },
-      h('form', {
+    return h('main', { class: 'login' },
+      h('form', { class: 'login-card', 'aria-labelledby': 'login-title',
         onsubmit: async (e) => {
           e.preventDefault();
           try {
@@ -252,10 +288,12 @@
           } catch (err) { fail(err); }
         },
       },
-      h('div', { class: 'lang-row' }, langSelect()),
-      h('h1', {}, t('app.title')),
+      h('div', { class: 'lang-row' }, icon('lang'), langSelect()),
+      h('div', { class: 'login-logo', 'aria-hidden': 'true' }, 'ST'),
+      h('h1', { id: 'login-title' }, t('app.title')),
+      h('p', { class: 'login-sub' }, t('login.sub')),
       field(t('lbl.username'), u), field(t('lbl.password'), p),
-      h('button', { class: 'primary', type: 'submit' }, t('btn.login'))));
+      h('button', { class: 'primary big', type: 'submit' }, t('btn.login'))));
   }
 
   function logout() {
@@ -296,6 +334,29 @@
 
   function debounce(fn, ms = 300) { let id; return (...a) => { clearTimeout(id); id = setTimeout(() => fn(...a), ms); }; }
 
+  /** A button that opens a short list of links (keyboard: Enter/Space opens, arrows move, Escape closes). */
+  function menuButton(label, items, cls = '') {
+    const list = h('div', { class: 'menu-list', role: 'menu', hidden: true },
+      items.map(([text, href]) => h('a', { role: 'menuitem', href, tabindex: '-1' }, text)));
+    const btn = h('button', { type: 'button', class: 'menu-btn ' + cls, 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, label, icon('chevron', 'chev'));
+    const links = () => [...list.querySelectorAll('a')];
+    const close = (refocus) => { list.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('click', outside, true); if (refocus) btn.focus(); };
+    const outside = (e) => { if (!box.contains(e.target)) close(false); };
+    const open = () => { list.hidden = false; btn.setAttribute('aria-expanded', 'true'); document.addEventListener('click', outside, true); links()[0].focus(); };
+    btn.addEventListener('click', () => (list.hidden ? open() : close(true)));
+    btn.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); open(); } });
+    list.addEventListener('keydown', (e) => {
+      const a = links(), i = a.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); close(true); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); a[(i + 1) % a.length].focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); a[(i - 1 + a.length) % a.length].focus(); }
+      else if (e.key === 'Tab') close(false);
+    });
+    list.addEventListener('click', () => close(false));
+    const box = h('div', { class: 'menu' }, btn, list);
+    return box;
+  }
+
   // ---------------------------------------------------------------- documents
   async function pageDocs() {
     const f = { doc_type: '', warehouse_id: '', status: '', q: '', date_from: '', date_to: '' };
@@ -310,8 +371,9 @@
             td(r.customer_name || r.supplier_name || ''), td(r.line_count, true), td(statusBadge(r.status)), td(r.created_by_name)))));
       } catch (e) { fail(e); }
     }
-    const newBtns = myDocTypes().map((x) => h('a', { class: 'btn', href: '#/new/' + x }, '+ ' + docTypeLabel(x)));
-    if (canScan()) newBtns.unshift(h('a', { class: 'btn primary', href: '#/scan' }, '📷 ' + t('nav.scan')));
+    const newBtns = [];
+    if (canScan()) newBtns.push(h('a', { class: 'btn', href: '#/scan' }, icon('scan'), t('nav.scan')));
+    if (myDocTypes().length) newBtns.push(menuButton(h('span', {}, icon('plus'), t('doc.newMenu')), myDocTypes().map((x) => [docTypeLabel(x), '#/new/' + x]), 'primary'));
     const docNoInput = h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) });
     view(h('h2', {}, t('nav.docs')), h('div', { class: 'actions' }, newBtns),
       h('div', { class: 'filters' },
@@ -344,7 +406,7 @@
         } }, t('btn.delete')));
       }
       if (d.status === 'POSTED' && !isRev && d.doc_type === 'SALE' && canDeposit() && d.items.some((i) => i.base_qty > (i.deposited_base || 0))) {
-        act.push(h('a', { class: 'btn', href: '#/deposit-new/' + id }, '📦 ' + t('dep.createFromSale')));
+        act.push(h('a', { class: 'btn', href: '#/deposit-new/' + id }, icon('deposits'), t('dep.createFromSale')));
       }
       if (d.status === 'POSTED' && !isRev && isManager()) {
         act.push(h('button', { class: 'danger', onclick: async () => {
@@ -360,7 +422,7 @@
     const kv = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('b', {}, v ?? ''));
     const hasDep = d.items.some((i) => i.deposited_base > 0);
     const groups = groupItems(d.items);
-    if (d.bill_scan_id) act.unshift(h('button', { onclick: () => showBillImage(d.bill_scan_id) }, '🧾 ' + t('scan.viewBill')));
+    if (d.bill_scan_id) act.unshift(h('button', { onclick: () => showBillImage(d.bill_scan_id) }, icon('receipt'), t('scan.viewBill')));
     V(
       h('p', {}, h('a', { href: '#/docs' }, '← ' + t('nav.docs'))),
       h('h2', {}, docTypeLabel(d.doc_type) + ' ' + d.doc_no + ' ', statusBadge(d.status)),
@@ -371,7 +433,7 @@
         d.reverses_document_id ? kv(t('lbl.reversesDoc'), h('a', { href: '#/doc/' + d.reverses_document_id }, '#' + d.reverses_document_id)) : null,
         d.remark ? kv(t('lbl.remark'), d.remark) : null),
       h('div', { class: 'card lines-card' },
-        h('div', { class: 'lines-head' }, h('b', {}, '☰ ' + t('uq.items')), h('span', { class: 'hint' }, t('xl.count', { n: groups.length })),
+        h('div', { class: 'lines-head' }, h('b', {}, icon('list'), t('uq.items')), h('span', { class: 'hint' }, t('xl.count', { n: groups.length })),
           h('span', { class: 'hint' }, t('uq.totalPc', { n: fmtNum(groups.reduce((a, g) => a + g.base, 0)) }))),
         table(['#', t('lbl.code'), t('lbl.product'), ...[1, 2, 3].flatMap((n) => [{ label: t('uq.qtyN', { n }), num: true }, t('uq.unitN', { n })]),
           { label: t('uq.total'), num: true }, ...(hasDep ? [{ label: t('dep.colDepositPc'), num: true }] : [])],
@@ -545,10 +607,10 @@
       toast(t('xl.done', { n: r.lines.length }), problems.length ? 'err' : undefined);
     }
     const xlBar = h('div', { class: 'xlbar' },
-      h('label', { class: 'btn' }, '📥 ' + t('xl.import'), h('input', { type: 'file', accept: '.xlsx,.xls,.csv,.htm,.html', hidden: true, onchange: importLines })),
+      h('label', { class: 'btn' }, icon('sheet'), t('xl.import'), h('input', { type: 'file', accept: '.xlsx,.xls,.csv,.htm,.html', class: 'vh', onchange: importLines })),
       h('button', { type: 'button', class: 'link', onclick: () => downloadFile('/document-lines/template', { with_products: true }, 'items-template.xlsx') }, t('xl.template')),
       h('span', { class: 'hint' }, t('xl.hint')));
-    const scanInput = h('input', { type: 'text', class: 'scaninput', placeholder: t('scan.inputPh'), autocomplete: 'off',
+    const scanInput = h('input', { type: 'text', class: 'scaninput', placeholder: t('scan.inputPh'), 'aria-label': t('scan.inputPh'), autocomplete: 'off',
       onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); e.target.value = ''; addByCode(v); } } });
 
     async function submit(post) {
@@ -599,7 +661,7 @@
           const c = await api('/customers', { method: 'POST', body: { code: sug.code || ('C' + Date.now().toString().slice(-7)), name: sug.name || sug.code } });
           parties = await api('/customers'); state.party = c.id; renderParty(); toast(t('msg.saved'));
         } catch (e) { fail(e); }
-      } }, '+ ' + t('scan.addCustomer', { name: [sug.code, sug.name].filter(Boolean).join(' ') })) : null]));
+      } }, icon('plus'), t('scan.addCustomer', { name: [sug.code, sug.name].filter(Boolean).join(' ') })) : null]));
     }
     renderParty();
 
@@ -613,9 +675,9 @@
         partyKind ? field(partyKind === 'customer' ? t('lbl.customer') : t('lbl.supplier'), partyBox) : null,
         field(t('lbl.remark'), h('input', { type: 'text', value: state.remark, oninput: (e) => { state.remark = e.target.value; } }), 'wide')),
       xlBar, fileReport,
-      h('div', { class: 'scanbar' }, h('span', {}, '🔎'), scanInput, barcodeCameraButton(addByCode)),
+      h('div', { class: 'scanbar' }, scanInput, barcodeCameraButton(addByCode)),
       h('div', { class: 'card lines-card' },
-        h('div', { class: 'lines-head' }, h('b', {}, '☰ ' + t('uq.items')), lineCount, totalBox),
+        h('div', { class: 'lines-head' }, h('b', {}, icon('list'), t('uq.items')), lineCount, totalBox),
         h('div', { class: 'tablewrap' },
           h('table', { class: 'lines' }, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), unitHeaders(),
             h('th', { class: 'num' }, t('uq.total')),
@@ -623,7 +685,7 @@
             h('th', {}, t('uq.available')), isOut ? h('th', {}, t('lbl.status')) : null, h('th', {}))), body))),
       isSale ? h('p', { class: 'hint' }, t('dep.lineHintPc')) : null,
       h('div', { class: 'actions' },
-        h('button', { type: 'button', onclick: () => { lines.push(blank()); renderLines(); } }, '+ ' + t('btn.addLine')),
+        h('button', { type: 'button', onclick: () => { lines.push(blank()); renderLines(); } }, icon('plus'), t('btn.addLine')),
         h('button', { type: 'button', class: 'link danger-link', onclick: () => {
           if (lines.length > 1 && !confirm(t('xl.confirmClear', { n: lines.length }))) return;
           lines = [blank()]; fileReport.replaceChildren(); renderLines();
@@ -633,13 +695,13 @@
         h('button', { type: 'button', class: 'primary', onclick: () => submit(true) }, t('btn.savePost'))),
     ];
     V(h('p', {}, h('a', { href: '#/docs' }, '← ' + t('nav.docs'))),
-      h('h2', {}, t('btn.new') + ' ' + docTypeLabel(type), draft ? h('span', { class: 'badge scan' }, '📷 ' + t('scan.fromBill')) : null),
+      h('h2', {}, t('btn.new') + ' ' + docTypeLabel(type), draft ? h('span', { class: 'badge scan' }, icon('camera'), t('scan.fromBill')) : null),
       warnings,
       draft && draft.imageUrl
         ? h('div', { class: 'newdoc-split' }, h('div', {}, form),
           h('div', { class: 'card billside' }, h('h3', {}, t('scan.billImage')), h('img', { src: draft.imageUrl, class: 'billimg zoomable', onclick: (e) => e.target.classList.toggle('zoom') }),
             draft.total_amount != null ? h('p', { class: 'hint' }, t('scan.total') + ': ' + fmtNum(draft.total_amount)) : null,
-            draft.is_handwritten ? h('p', { class: 'hint' }, '✍ ' + t('scan.handwritten')) : null,
+            draft.is_handwritten ? h('p', { class: 'hint' }, icon('pen'), t('scan.handwritten')) : null,
             draft.ocr_text ? h('details', { class: 'ocrtext' }, h('summary', {}, t('scan.ocrText')), h('pre', {}, draft.ocr_text)) : null))
         : form);
     renderLines();
@@ -707,7 +769,7 @@
       } catch (e) { fail(e); }
     }
     view(h('h2', {}, t('nav.products')),
-      h('div', { class: 'actions' }, canMaster() ? h('button', { class: 'primary', onclick: () => productForm(null) }, '+ ' + t('btn.new')) : null),
+      h('div', { class: 'actions' }, canMaster() ? h('button', { class: 'primary', onclick: () => productForm(null) }, icon('plus'), t('btn.new')) : null),
       h('div', { class: 'filters' },
         field(t('btn.search'), h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) })),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { f.active_only = e.target.checked; load(); } }), t('lbl.activeOnly'))),
@@ -903,7 +965,7 @@
       h('div', { class: 'actions' }, h('button', { type: 'button', onclick: close }, t('btn.cancel')), h('button', { class: 'primary', type: 'submit' }, t('btn.save')))));
       document.body.append(dlg); dlg.showModal();
     }
-    view(h('h2', {}, t('nav.users')), h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => userForm(null) }, '+ ' + t('btn.new'))), box);
+    view(h('h2', {}, t('nav.users')), h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => userForm(null) }, icon('plus'), t('btn.new'))), box);
     load();
   }
 
@@ -1027,7 +1089,7 @@
         st.type === 'SALE' ? h('label', { class: 'check wide' }, h('input', { type: 'checkbox', checked: o.create_missing_customers, onchange: (e) => { o.create_missing_customers = e.target.checked; } }), t('imp.opt.createCustomers')) : null,
         st.type === 'SALE' ? h('fieldset', { class: 'wide' }, h('legend', {}, t('imp.opt.rules')),
           o.doc_type_rules.map(rule),
-          h('button', { type: 'button', onclick: () => { o.doc_type_rules.push({ prefix: '', doc_type: 'CUSTOMER_RETURN' }); render(); } }, '+ ' + t('imp.opt.addRule')),
+          h('button', { type: 'button', onclick: () => { o.doc_type_rules.push({ prefix: '', doc_type: 'CUSTOMER_RETURN' }); render(); } }, icon('plus'), t('imp.opt.addRule')),
           h('p', { class: 'hint' }, t('imp.opt.rulesHint'))) : null);
     }
 
@@ -1150,7 +1212,7 @@
     const V = viewFor();
     const rows = await api('/imports?limit=100');
     V(h('h2', {}, t('nav.imports')),
-      h('div', { class: 'actions' }, h('a', { class: 'btn primary', href: '#/import' }, '+ ' + t('nav.import'))),
+      h('div', { class: 'actions' }, h('a', { class: 'btn primary', href: '#/import' }, icon('plus'), t('nav.import'))),
       table([t('imp.col.id'), t('lbl.date'), t('imp.file'), t('lbl.docType'), t('lbl.warehouse'), t('lbl.status'), { label: t('imp.sum.rows'), num: true },
         { label: t('imp.sum.error'), num: true }, { label: t('imp.sum.duplicate'), num: true }, { label: t('imp.postedDocs'), num: true }, t('lbl.createdBy'), ''],
       rows.map((b) => h('tr', {}, td('#' + b.batch_id), td(fmtDateTime(b.uploaded_at)), td(b.file_name), td(docTypeLabel(b.doc_type)), td(b.warehouse_code),
@@ -1177,7 +1239,7 @@
     V(h('h2', {}, t('nav.transfers')),
       h('div', { class: 'filters' },
         field(t('lbl.status'), select([['', t('lbl.all')], ...TST.map((x) => [x, t('status.' + x)])], '', { onchange: (e) => { f.status = e.target.value; load().catch(fail); } })),
-        canTransfer() ? h('a', { class: 'btn primary', href: '#/transfer-new' }, '+ ' + t('tf.new')) : null),
+        canTransfer() ? h('a', { class: 'btn primary', href: '#/transfer-new' }, icon('plus'), t('tf.new')) : null),
       box);
     await load();
   }
@@ -1276,10 +1338,10 @@
         field(t('lbl.remark'), h('input', { value: '', oninput: (e) => { st.remark = e.target.value; } }), 'wide'),
         h('p', { class: 'hint wide' }, t('tf.modeHint'))),
       h('div', { class: 'card lines-card' },
-        h('div', { class: 'lines-head' }, h('b', {}, '☰ ' + t('uq.items')), lineCount),
+        h('div', { class: 'lines-head' }, h('b', {}, icon('list'), t('uq.items')), lineCount),
         h('div', { class: 'tablewrap' }, h('table', { class: 'lines' }, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), unitHeaders(),
           h('th', { class: 'num' }, t('uq.total')), h('th', {}, t('uq.availableFrom')), h('th', {}, t('lbl.status')), h('th', {}))), body))),
-      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { lines.push(blank()); renderLines(); } }, '+ ' + t('btn.addLine')),
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { lines.push(blank()); renderLines(); } }, icon('plus'), t('btn.addLine')),
         h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: submit }, t('btn.save'))));
   }
 
@@ -1349,7 +1411,7 @@
   }
 
   /** Grouped bar chart. series = [{name, cls, values[]}], labels = x labels. Negative values are drawn below the axis. */
-  function barChart(labels, series, height = 190) {
+  function barChart(labels, series, height = 190, title = '') {
     const W = 720, padL = 46, padR = 8, padT = 10, padB = 24, H = height;
     const all = series.flatMap((s) => s.values);
     const max = Math.max(0, ...all), min = Math.min(0, ...all);
@@ -1357,7 +1419,9 @@
     const y = (v) => padT + (H - padT - padB) * (1 - (v - min) / span);
     const n = labels.length, gw = (W - padL - padR) / n, bw = Math.max(1, Math.min(18, (gw - 2) / series.length));
     const nice = (v) => (Math.abs(v) >= 1000 ? Math.round(v / 100) / 10 + 'k' : String(Math.round(v)));
-    const g = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', preserveAspectRatio: 'none' });
+    const name = title || series.map((x) => x.name).join(', ');
+    const g = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', preserveAspectRatio: 'none', 'aria-label': name });
+    g.append(svgEl('title', {}, name));
     [min, (max + min) / 2, max].forEach((v) => g.append(svgEl('line', { x1: padL, x2: W - padR, y1: y(v), y2: y(v), class: 'grid' }), svgEl('text', { x: padL - 4, y: y(v) + 3, class: 'tick', 'text-anchor': 'end' }, nice(v))));
     g.append(svgEl('line', { x1: padL, x2: W - padR, y1: y(0), y2: y(0), class: 'axis' }));
     const step = Math.max(1, Math.ceil(n / 8));
@@ -1380,26 +1444,31 @@
       const d = await api('/dashboard' + qs(f));
       if (main() !== V.el) return;
       const k = d.kpi;
-      const card = (label, value, cls, href) => h(href ? 'a' : 'div', { class: 'stat ' + (cls || ''), href }, h('b', {}, fmtNum(value)), h('span', {}, label));
+      const kpi = (label, value, ic, tone, href) => h(href ? 'a' : 'div', { class: 'kpi ' + tone, href },
+        h('span', { class: 'kpi-ic' }, icon(ic)), h('span', { class: 'kpi-txt' }, h('span', { class: 'kpi-lbl' }, label), h('b', { class: 'kpi-val' }, fmtNum(value))));
+      const chip = (label, value, ic, hot, href) => h('a', { class: 'chip' + (Number(value) ? ' ' + hot : ''), href, role: 'listitem' },
+        icon(ic), h('span', {}, label), h('b', {}, fmtNum(value)));
       const dates = d.series.map((x) => x.date);
       const topMax = Math.max(1, ...d.top_products.map((p) => Number(p.sold)));
       box.replaceChildren(
-        h('div', { class: 'stats' },
-          card(t('dash.totalQty'), k.total_qty), card(t('dash.skuInStock'), k.sku_in_stock),
-          card(t('dash.lowStock'), k.low_stock, k.low_stock ? 'warn' : '', '#/reports'), card(t('dash.outOfStock'), k.out_of_stock, k.out_of_stock ? 'bad' : ''),
-          card(t('dash.soldToday'), k.sold_today, 'good'), card(t('dash.soldPeriod', { n: d.days }), k.sold_period),
-          card(t('dash.inTransit'), k.transfers_in_transit, '', '#/transfers'),
-          card(t('dash.deposits'), k.deposits_open, k.deposits_overdue ? 'warn' : '', '#/deposits'), card(t('dash.draftDocs'), k.draft_documents, k.draft_documents ? 'warn' : '', '#/docs')),
+        h('div', { class: 'kpis' },
+          kpi(t('dash.totalQty'), k.total_qty, 'stock', 'blue', '#/stock'), kpi(t('dash.skuInStock'), k.sku_in_stock, 'products', 'violet', '#/stock'),
+          kpi(t('dash.soldToday'), k.sold_today, 'cart', 'green'), kpi(t('dash.soldPeriod', { n: d.days }), k.sold_period, 'trend', 'amber', '#/reports')),
+        h('div', { class: 'chips', role: 'list', 'aria-label': t('dash.attention') },
+          chip(t('dash.lowStock'), k.low_stock, 'alert', 'warn', '#/reports'), chip(t('dash.outOfStock'), k.out_of_stock, 'ban', 'bad', '#/stock'),
+          chip(t('dash.inTransit'), k.transfers_in_transit, 'transfers', 'info', '#/transfers'),
+          chip(t('dash.deposits'), k.deposits_open, 'deposits', k.deposits_overdue ? 'warn' : 'info', '#/deposits'),
+          chip(t('dash.draftDocs'), k.draft_documents, 'draft', 'warn', '#/docs')),
         h('div', { class: 'grid2' },
-          h('div', { class: 'card' }, h('h3', {}, t('dash.salesChart', { n: d.days })), barChart(dates, [{ name: t('rep.c.sold'), cls: 'a', values: d.series.map((x) => x.sold) }])),
+          h('div', { class: 'card' }, h('h3', {}, t('dash.salesChart', { n: d.days })), barChart(dates, [{ name: t('rep.c.sold'), cls: 'a', values: d.series.map((x) => x.sold) }], 190, t('dash.salesChart', { n: d.days }))),
           h('div', { class: 'card' }, h('h3', {}, t('dash.flowChart', { n: d.days })),
-            barChart(dates, [{ name: t('lbl.in'), cls: 'a', values: d.series.map((x) => x.in) }, { name: t('lbl.out'), cls: 'b', values: d.series.map((x) => x.out) }]),
+            barChart(dates, [{ name: t('lbl.in'), cls: 'a', values: d.series.map((x) => x.in) }, { name: t('lbl.out'), cls: 'b', values: d.series.map((x) => x.out) }], 190, t('dash.flowChart', { n: d.days })),
             h('p', { class: 'legend' }, h('i', { class: 'sw a' }), t('lbl.in'), ' ', h('i', { class: 'sw b' }), t('lbl.out')))),
         h('div', { class: 'grid2' },
           h('div', { class: 'card' }, h('h3', {}, t('dash.topProducts')),
             d.top_products.length ? d.top_products.map((p) => h('div', { class: 'hbar' },
               h('span', { class: 'nm' }, `${p.product_code} — ${p.product_name}`),
-              h('span', { class: 'bg' }, h('i', { style: `width:${Math.round((Number(p.sold) / topMax) * 100)}%` })), h('b', {}, fmtNum(p.sold)))) : h('p', { class: 'empty' }, t('lbl.noData'))),
+              h('span', { class: 'bg' }, h('i', { style: `width:${Math.round((Number(p.sold) / topMax) * 100)}%` })), h('b', {}, fmtNum(p.sold)))) : h('div', { class: 'empty' }, icon('inbox'), h('span', {}, t('lbl.noData')))),
           h('div', { class: 'card' }, h('h3', {}, t('dash.byWarehouse')),
             table([t('lbl.warehouse'), { label: t('dash.skuInStock'), num: true }, { label: t('lbl.qtyPc'), num: true }],
               d.by_warehouse.map((w) => h('tr', {}, td(`${w.warehouse_code} — ${w.name}`), td(fmtNum(w.skus), true), td(fmtNum(w.qty), true)))))),
@@ -1410,7 +1479,7 @@
     const whSel = select([['', t('lbl.all')], ...S.whs.filter((w) => S.me.warehouses.includes(w.warehouse_id) && w.warehouse_type === 'PHYSICAL').map((w) => [w.warehouse_id, w.warehouse_code + ' — ' + w.name])], '',
       { onchange: (e) => { f.warehouse_id = e.target.value; load().catch(fail); } });
     V(h('h2', {}, t('nav.dashboard')),
-      h('div', { class: 'filters' }, field(t('lbl.warehouse'), whSel),
+      h('div', { class: 'actions' }, field(t('lbl.warehouse'), whSel),
         field(t('dash.period'), select([[7, t('dash.lastDays', { n: 7 })], [30, t('dash.lastDays', { n: 30 })], [90, t('dash.lastDays', { n: 90 })]], 30, { onchange: (e) => { f.days = Number(e.target.value); load().catch(fail); } }))),
       box);
     await load();
@@ -1577,7 +1646,7 @@
 
   /** A "📷" button that takes/chooses a photo, reads the barcode and calls onCode(text). */
   function barcodeCameraButton(onCode) {
-    const inp = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, onchange: async (e) => {
+    const inp = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'vh', onchange: async (e) => {
       const f = e.target.files[0]; e.target.value = '';
       if (!f) return;
       toast(t('scan.decoding'));
@@ -1586,7 +1655,7 @@
         if (code) onCode(code.trim()); else toast(t('scan.noBarcode'), 'err');
       } catch (_) { toast(t('scan.noBarcode'), 'err'); }
     } });
-    return h('label', { class: 'btn', title: t('scan.cameraHint') }, '📷 ' + t('scan.camera'), inp);
+    return h('label', { class: 'btn', title: t('scan.cameraHint') }, icon('camera'), t('scan.camera'), inp);
   }
 
   /** Find a product by product code, product barcode or unit barcode. Returns { product, unit_code } or null. */
@@ -1656,8 +1725,8 @@
         : h('p', { class: 'banner warn' }, st.engine === 'claude' ? t('scan.notConfigured') : t('scan.ocrMissing')),
       h('p', { class: 'hint' }, t('scan.hint')),
       h('div', { class: 'actions' },
-        h('label', { class: 'btn primary' }, '📷 ' + t('scan.takePhoto'), h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, onchange: onFile })),
-        h('label', { class: 'btn' }, '🖼 ' + t('scan.choose'), h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: onFile }))),
+        h('label', { class: 'btn primary' }, icon('camera'), t('scan.takePhoto'), h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'vh', onchange: onFile })),
+        h('label', { class: 'btn' }, icon('image'), t('scan.choose'), h('input', { type: 'file', accept: 'image/*', class: 'vh', onchange: onFile }))),
       preview, h('div', { class: 'actions' }, readBtn), status,
       h('div', { class: 'card' }, h('h3', {}, t('scan.tipsTitle')), h('ul', { class: 'tips' }, ['scan.tip1', 'scan.tip2', 'scan.tip3', 'scan.tip4'].map((k) => h('li', {}, t(k))))));
   }
@@ -1748,7 +1817,7 @@
         h('h3', { class: 'wide' }, t('dep.deliverTitle')),
         field(t('dep.deliveryDate'), dlvDate), field(t('lbl.remark'), dlvRemark, 'wide'),
         h('div', { class: 'actions wide' },
-          h('button', { class: 'primary', onclick: () => deliver(false) }, '🚚 ' + t('dep.deliverSelected')),
+          h('button', { class: 'primary', onclick: () => deliver(false) }, icon('truck'), t('dep.deliverSelected')),
           h('button', { onclick: () => deliver(true) }, t('dep.deliverAll')))) : null,
       d.deliveries.length ? h('div', { class: 'card' }, h('h3', {}, t('dep.history')),
         table([t('dep.deliveryNo'), t('lbl.date'), t('lbl.product'), { label: t('lbl.qtyPc'), num: true }, t('lbl.createdBy'), t('lbl.remark')],
@@ -1857,6 +1926,7 @@
         disabled: !s || !p || opts.disabled, 'data-slot': i,
         oninput: (e) => { q[i] = e.target.value; onChange && onChange(); },
         onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); focusNextQty(e.target); } } });
+      inp.setAttribute('aria-label', t('uq.qtyN', { n: i + 1 }) + (s && p ? ' (' + unitName(s.code) + ')' : ''));
       if (!s || !p) inp.value = '';
       return [h('td', { class: 'num uqcell' }, inp), h('td', { class: 'ulabel' }, s && p ? `${unitName(s.code)}/${s.factor}` : '')];
     });

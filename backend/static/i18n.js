@@ -980,3 +980,19 @@ Object.assign(I18N.lo, {
   'chk.deposits_within_sold_qty': 'ເຄື່ອງຝາກບໍ່ເກີນຈຳນວນທີ່ຂາຍ', 'chk.deposits_only_on_posted_sales': 'ເຄື່ອງຝາກຄ້າງສົ່ງຢູ່ເທິງບິນຂາຍທີ່ຍັງໃຊ້ງານ',
   'chk.deposit_deliveries_match': 'ຍອດສົ່ງເຄື່ອງກົງກັບປະຫວັດການສົ່ງ', 'chk.deposit_status_consistent': 'ສະຖານະໃບຝາກກົງກັບຍອດຄົງຄ້າງ',
 });
+// UI refresh: header menu, skip link, login subtitle, dashboard attention row
+Object.assign(I18N.th, {
+  'nav.menu': 'เปิด/ปิดเมนู', 'nav.skip': 'ข้ามไปยังเนื้อหาหลัก', 'login.sub': 'เข้าสู่ระบบเพื่อจัดการสต็อกทุกคลัง',
+  'doc.newMenu': 'สร้างเอกสาร', 'dash.attention': 'รายการที่ต้องติดตาม',
+});
+Object.assign(I18N.en, {
+  'nav.menu': 'Open / close menu', 'nav.skip': 'Skip to main content', 'login.sub': 'Sign in to manage stock across all warehouses',
+  'doc.newMenu': 'New document', 'dash.attention': 'Needs attention',
+});
+Object.assign(I18N.lo, {
+  'nav.menu': 'ເປີດ/ປິດເມນູ', 'nav.skip': 'ຂ້າມໄປຫາເນື້ອຫາຫຼັກ', 'login.sub': 'ເຂົ້າສູ່ລະບົບເພື່ອຈັດການສະຕັອກທຸກສາງ',
+  'doc.newMenu': 'ສ້າງເອກະສານ', 'dash.attention': 'ລາຍການທີ່ຕ້ອງຕິດຕາມ',
+});
+Object.assign(I18N.th, { 'lbl.filters': 'ตัวกรอง' });
+Object.assign(I18N.en, { 'lbl.filters': 'Filters' });
+Object.assign(I18N.lo, { 'lbl.filters': 'ຕົວກອງ' });
