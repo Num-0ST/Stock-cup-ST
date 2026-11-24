@@ -393,3 +393,21 @@ table.lines.cnt td.uqcell input.uq { width: 7rem; }
   .login-card { padding: 1.5rem 1.25rem; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---- paging ---- */
+.pager { display: flex; align-items: center; justify-content: space-between; gap: .6rem 1rem; flex-wrap: wrap; padding: .75rem 0 0; }
+.pager[hidden] { display: none; }
+.lines-card .pager { padding: .65rem 1rem; border-top: 1px solid var(--line); background: var(--panel-2); }
+.pg-info { color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
+.pg-nav { display: inline-flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.pg-btn { min-width: 38px; min-height: 38px; padding: .3rem .6rem; font-variant-numeric: tabular-nums; }
+.pg-btn.cur, .pg-btn.cur:disabled { background: var(--brand); border-color: var(--brand); color: #fff; opacity: 1; cursor: default; font-weight: 600; }
+.pg-gap { color: var(--muted); padding: 0 .2rem; }
+.pg-cur { padding: 0 .5rem; font-weight: 600; color: var(--text-2); }
+.pg-size { display: inline-flex; align-items: center; gap: .45rem; color: var(--muted); font-size: .9rem; }
+.pg-size select { width: auto; min-height: 38px; padding: .3rem .5rem; }
+@media (max-width: 640px) {
+  .pager { justify-content: center; }
+  .pg-info { width: 100%; text-align: center; }
+  .pg-btn { min-width: 44px; min-height: 44px; }
+}

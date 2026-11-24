@@ -148,12 +148,67 @@
     return v;
   }
 
+  // ---------------------------------------------------------------- paging
+  const PAGE_SIZES = [25, 50, 100, 200];
+  const pageSize = () => { const n = Number(navStore.get('wms_page_size', '50')); return PAGE_SIZES.includes(n) ? n : 50; };
+  /** Page bar: « ‹ 1 2 3 … › »  +  "Showing 51–100 of 191"  +  rows-per-page.
+      total = a number when known; null when only "is there a next page" is known (server lists). */
+  function makePager(onGo) {
+    const pg = { page: 0, size: pageSize(), total: 0, more: false, shown: 0 };
+    pg.el = h('nav', { class: 'pager', 'aria-label': t('pg.label') });
+    pg.pages = () => (pg.total == null ? pg.page + (pg.more ? 2 : 1) : Math.max(1, Math.ceil(pg.total / pg.size)));
+    pg.start = () => pg.page * pg.size;
+    pg.slice = (arr) => arr.slice(pg.start(), pg.start() + pg.size);
+    pg.showIndex = (i) => { pg.page = Math.max(0, Math.floor(i / pg.size)); };
+    const go = (n) => { pg.page = n; onGo(); };
+    pg.render = () => {
+      const pages = pg.pages();
+      if (pg.page > pages - 1) pg.page = pages - 1;
+      const single = pg.total != null ? pg.total <= pg.size : pg.page === 0 && !pg.more;
+      if (single) { pg.el.replaceChildren(); pg.el.hidden = true; return; }
+      pg.el.hidden = false;
+      const from = pg.start() + 1, to = pg.start() + (pg.total == null ? pg.shown : Math.min(pg.size, pg.total - pg.start()));
+      const info = h('span', { class: 'pg-info' }, pg.total == null ? t('pg.showingOpen', { from: fmtNum(from), to: fmtNum(to) })
+        : t('pg.showing', { from: fmtNum(from), to: fmtNum(to), total: fmtNum(pg.total) }));
+      const btn = (label, n, aria, cur) => h('button', { type: 'button', class: 'pg-btn' + (cur ? ' cur' : ''), disabled: n < 0 || n >= pages || cur,
+        'aria-label': aria, 'aria-current': cur ? 'page' : null, onclick: () => go(n) }, label);
+      const nums = [];
+      if (pg.total != null) {
+        const want = new Set([0, pages - 1, pg.page - 1, pg.page, pg.page + 1].filter((n) => n >= 0 && n < pages));
+        let last = -1;
+        [...want].sort((a, b) => a - b).forEach((n) => {
+          if (n - last > 1) nums.push(h('span', { class: 'pg-gap', 'aria-hidden': 'true' }, '…'));
+          nums.push(btn(String(n + 1), n, t('pg.page', { n: n + 1 }), n === pg.page)); last = n;
+        });
+      } else nums.push(h('span', { class: 'pg-cur' }, t('pg.page', { n: pg.page + 1 })));
+      const sizeSel = select(PAGE_SIZES.map((n) => [n, String(n)]), pg.size, { 'aria-label': t('pg.perPage'), onchange: (e) => {
+        const first = pg.start(); pg.size = Number(e.target.value); navStore.set('wms_page_size', String(pg.size)); pg.showIndex(first); onGo();
+      } });
+      pg.el.replaceChildren(info, h('span', { class: 'pg-nav' },
+        pg.total != null ? btn('«', 0, t('pg.first')) : null, btn('‹', pg.page - 1, t('pg.prev')), nums, btn('›', pg.page + 1, t('pg.next')),
+        pg.total != null ? btn('»', pages - 1, t('pg.last')) : null),
+        h('label', { class: 'pg-size' }, h('span', {}, t('pg.perPage')), sizeSel));
+    };
+    /** server lists: ask for one row more than a page to learn whether a next page exists */
+    pg.q = () => ({ limit: pg.size + 1, offset: pg.start() });
+    pg.take = (rows) => { pg.total = null; pg.more = rows.length > pg.size; const r = rows.slice(0, pg.size); pg.shown = r.length; pg.render(); return r; };
+    return pg;
+  }
+
   function table(headers, rows, opts = {}) {
     if (!rows.length) return h('div', { class: 'empty' }, icon('inbox'), h('span', {}, t('lbl.noData')));
-    return h('div', { class: 'tablewrap' },
+    const body = h('tbody');
+    const wrap = h('div', { class: 'tablewrap' },
       h('table', {},
         h('thead', {}, h('tr', {}, headers.map((x) => h('th', { class: x.num ? 'num' : '' }, x.label || x)))),
-        h('tbody', {}, rows)));
+        body));
+    if (opts.paged === false || rows.length <= PAGE_SIZES[0]) { body.append(...rows); return wrap; }
+    // long lists are shown a page at a time (the row elements are kept, so typed values survive page changes)
+    const pg = makePager(() => { draw(); wrap.scrollIntoView({ block: 'nearest' }); });
+    pg.total = rows.length;
+    const draw = () => { pg.render(); body.replaceChildren(...pg.slice(rows)); };
+    draw();
+    return h('div', { class: 'paged' }, wrap, pg.el);
   }
   const td = (v, num) => h('td', { class: num ? 'num' : '' }, v);
 
@@ -305,9 +360,11 @@
   async function pageStock() {
     const f = { view: 'by_warehouse', warehouse_id: '', q: '', low_only: false };
     const box = h('div');
-    async function load() {
+    const pg = makePager(() => load(true));
+    async function load(keep) {
+      if (!keep) pg.page = 0;
       try {
-        const rows = await api('/stock/balances' + qs({ ...f, limit: 500 }));
+        const rows = pg.take(await api('/stock/balances' + qs({ ...f, ...pg.q() })));
         const total = f.view === 'total';
         box.replaceChildren(table(
           [t('lbl.code'), t('lbl.product'), ...(total ? [t('lbl.byWarehouse')] : [t('lbl.warehouse')]),
@@ -328,7 +385,7 @@
         field(t('lbl.warehouse'), select(whOptions(S.whs, true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
         field(t('btn.search'), q),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', onchange: (e) => { f.low_only = e.target.checked; load(); } }), t('lbl.lowOnly'))),
-      box);
+      box, pg.el);
     load();
   }
 
@@ -361,9 +418,11 @@
   async function pageDocs() {
     const f = { doc_type: '', warehouse_id: '', status: '', q: '', date_from: '', date_to: '' };
     const box = h('div');
-    async function load() {
+    const pg = makePager(() => load(true));
+    async function load(keep) {
+      if (!keep) pg.page = 0;
       try {
-        const rows = await api('/documents' + qs({ ...f, limit: 200 }));
+        const rows = pg.take(await api('/documents' + qs({ ...f, ...pg.q() })));
         box.replaceChildren(table(
           [t('lbl.date'), t('lbl.docType'), t('lbl.docNo'), t('lbl.warehouse'), t('lbl.party'), { label: t('lbl.lines'), num: true }, t('lbl.status'), t('lbl.createdBy')],
           rows.map((r) => h('tr', { class: 'click', onclick: () => { location.hash = '#/doc/' + r.document_id; } },
@@ -384,7 +443,7 @@
         barcodeCameraButton((code) => { docNoInput.value = code; f.q = code; load(); }),
         field(t('lbl.dateFrom'), h('input', { type: 'date', onchange: (e) => { f.date_from = e.target.value; load(); } })),
         field(t('lbl.dateTo'), h('input', { type: 'date', onchange: (e) => { f.date_to = e.target.value; load(); } }))),
-      box);
+      box, pg.el);
     load();
   }
 
@@ -487,6 +546,8 @@
       if (!lines.length) lines = [blank()];
     }
     const body = h('tbody');
+    const lpg = makePager(() => { renderLines(); body.closest('.lines-card').scrollIntoView({ block: 'nearest' }); });
+    const bad = (i, msg) => { lpg.showIndex(i); renderLines(); toast(msg, 'err'); };
     const lineCount = h('span', { class: 'hint' });
     const totalBox = h('span', { class: 'hint' });
     let avail = {};
@@ -499,7 +560,10 @@
 
     function renderLines() {
       refreshTotals();
-      body.replaceChildren(...lines.map((ln, idx) => {
+      lpg.total = lines.length; lpg.render();
+      const off = lpg.start();
+      body.replaceChildren(...lpg.slice(lines).map((ln, i) => {
+        const idx = off + i;
         const dl = 'dl' + idx;
         const search = h('input', { type: 'text', list: dl, class: 'psearch', placeholder: t('lbl.searchProduct'), value: ln.product ? `${ln.product.product_code} — ${ln.product.name}` : ln.text || '',
           autocomplete: 'off',
@@ -526,7 +590,7 @@
             renderLines();
             const slots = unitSlots(p);
             const want = unit ? slots.findIndex((s) => s && s.code === unit) : slots.findIndex(Boolean);
-            const inp = body.querySelectorAll('tr')[idx].querySelector(`input.uq[data-slot="${Math.max(0, want)}"]`);
+            const inp = body.querySelectorAll('tr')[idx - off].querySelector(`input.uq[data-slot="${Math.max(0, want)}"]`);
             if (inp) inp.focus();
           },
         });
@@ -569,6 +633,7 @@
         if (ln) Object.assign(ln, blank(), { product: r.product }); else { ln = { ...blank(), product: r.product }; lines.push(ln); }
       }
       addUnitQty(r.product, ln.q, r.unit_code, 1);
+      lpg.showIndex(lines.indexOf(ln));
       renderLines();
       toast(`+1 ${unitName(r.unit_code)} ${r.product.product_code} — ${r.product.name}`);
     }
@@ -590,6 +655,7 @@
         addUnitQty(x.product, ln.q, x.unit_code, x.qty);
       }
       lines = kept.length ? kept : [blank()];
+      lpg.page = 0;
       renderLines();
       const problems = [
         ...r.unmatched.map((u) => [u.row, t('xl.notFound', { code: [u.code, u.name].filter(Boolean).join(' '), qty: u.qty })]),
@@ -620,14 +686,14 @@
         const where = t('lbl.line') + ' ' + (i + 1) + ': ';
         if (!ln.product) {
           if (lines.length > 1 && !ln.q.some((x) => numOr0(x))) continue;      // ignore empty rows
-          toast(where + t('err.PRODUCT_NOT_FOUND'), 'err'); return;
+          bad(i, where + t('err.PRODUCT_NOT_FOUND')); return;
         }
-        if (ln.q.some((x) => numOr0(x) < 0)) { toast(where + t('err.BAD_QTY'), 'err'); return; }
+        if (ln.q.some((x) => numOr0(x) < 0)) { bad(i, where + t('err.BAD_QTY')); return; }
         const parts = qItems(ln.product, ln.q);
         const base = qtyBase(ln.product, ln.q);
-        if (!parts.length || !(base > 0)) { toast(where + t('err.BAD_QTY'), 'err'); return; }
+        if (!parts.length || !(base > 0)) { bad(i, where + t('err.BAD_QTY')); return; }
         let dep = isSale ? Math.round(numOr0(ln.dep)) : 0;
-        if (dep > base) { toast(where + t('err.DEPOSIT_EXCEEDS_SALE'), 'err'); return; }
+        if (dep > base) { bad(i, where + t('err.DEPOSIT_EXCEEDS_SALE')); return; }
         for (const pt of parts) {
           const b = Math.round(numOr0(pt.qty) * pt.factor);
           const take = Math.min(dep, b);
@@ -682,10 +748,10 @@
           h('table', { class: 'lines' }, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), unitHeaders(),
             h('th', { class: 'num' }, t('uq.total')),
             isSale ? h('th', { class: 'num', title: t('dep.lineHint') }, t('dep.colDepositPc')) : null,
-            h('th', {}, t('uq.available')), isOut ? h('th', {}, t('lbl.status')) : null, h('th', {}))), body))),
+            h('th', {}, t('uq.available')), isOut ? h('th', {}, t('lbl.status')) : null, h('th', {}))), body), lpg.el)),
       isSale ? h('p', { class: 'hint' }, t('dep.lineHintPc')) : null,
       h('div', { class: 'actions' },
-        h('button', { type: 'button', onclick: () => { lines.push(blank()); renderLines(); } }, icon('plus'), t('btn.addLine')),
+        h('button', { type: 'button', onclick: () => { lines.push(blank()); lpg.showIndex(lines.length - 1); renderLines(); const ins = body.querySelectorAll('input.psearch'); if (ins.length) ins[ins.length - 1].focus(); } }, icon('plus'), t('btn.addLine')),
         h('button', { type: 'button', class: 'link danger-link', onclick: () => {
           if (lines.length > 1 && !confirm(t('xl.confirmClear', { n: lines.length }))) return;
           lines = [blank()]; fileReport.replaceChildren(); renderLines();
@@ -714,9 +780,11 @@
     const f = { product_id: '', warehouse_id: '', doc_type: '', date_from: '', date_to: '' };
     const box = h('div');
     let pTimer;
-    async function load() {
+    const pg = makePager(() => load(true));
+    async function load(keep) {
+      if (!keep) pg.page = 0;
       try {
-        const rows = await api('/stock/movements' + qs({ ...f, limit: 300 }));
+        const rows = pg.take(await api('/stock/movements' + qs({ ...f, ...pg.q() })));
         box.replaceChildren(table(
           [t('lbl.date'), t('lbl.code'), t('lbl.product'), t('lbl.warehouse'), t('lbl.docType'), t('lbl.docNo'),
            { label: t('lbl.in'), num: true }, { label: t('lbl.out'), num: true }, { label: t('lbl.balance'), num: true }, t('lbl.user')],
@@ -748,7 +816,7 @@
         field(t('lbl.docType'), select([['', t('lbl.all')], ...DOC_TYPES.map((x) => [x, docTypeLabel(x)]), ['ADJUST_IN', t('doc.ADJUST_IN')], ['ADJUST_OUT', t('doc.ADJUST_OUT')], ['REVERSAL', t('doc.REVERSAL')]], '', { onchange: (e) => { f.doc_type = e.target.value; load(); } })),
         field(t('lbl.dateFrom'), h('input', { type: 'date', onchange: (e) => { f.date_from = e.target.value; load(); } })),
         field(t('lbl.dateTo'), h('input', { type: 'date', onchange: (e) => { f.date_to = e.target.value; load(); } }))),
-      box);
+      box, pg.el);
     load();
   }
 
@@ -756,9 +824,11 @@
   async function pageProducts() {
     const f = { q: '', active_only: true };
     const box = h('div');
-    async function load() {
+    const pg = makePager(() => load(true));
+    async function load(keep) {
+      if (!keep) pg.page = 0;
       try {
-        const rows = await api('/products' + qs({ ...f, limit: 300, active_only: f.active_only ? 'true' : 'false' }));
+        const rows = pg.take(await api('/products' + qs({ ...f, ...pg.q(), active_only: f.active_only ? 'true' : 'false' })));
         box.replaceChildren(table(
           [t('lbl.code'), t('lbl.product'), t('lbl.barcode'), t('lbl.category'), t('lbl.conversions'), { label: t('lbl.reorder'), num: true }, t('lbl.status'), ''],
           rows.map((p) => h('tr', {},
@@ -773,7 +843,7 @@
       h('div', { class: 'filters' },
         field(t('btn.search'), h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) })),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { f.active_only = e.target.checked; load(); } }), t('lbl.activeOnly'))),
-      box, h('div', { id: 'dialog-slot' }));
+      box, pg.el, h('div', { id: 'dialog-slot' }));
     load();
   }
 
@@ -1229,8 +1299,10 @@
     const V = viewFor();
     const f = { status: '' };
     const box = h('div');
-    async function load() {
-      const rows = await api('/transfers' + qs({ status: f.status, limit: 100 }));
+    const pg = makePager(() => load(true));
+    async function load(keep) {
+      if (!keep) pg.page = 0;
+      const rows = pg.take(await api('/transfers' + qs({ status: f.status, ...pg.q() })));
       box.replaceChildren(table([t('tf.no'), t('lbl.date'), t('tf.mode'), t('tf.from'), t('tf.to'), t('lbl.status'), { label: t('tf.sent'), num: true }, { label: t('tf.received'), num: true }],
         rows.map((r) => h('tr', { class: 'click', onclick: () => { location.hash = '#/transfer/' + r.transfer_id; } },
           td(r.transfer_no), td(fmtDate(r.transfer_date)), td(t('tf.mode.' + r.transfer_mode)), td(r.from_code), td(r.to_code),
@@ -1240,7 +1312,7 @@
       h('div', { class: 'filters' },
         field(t('lbl.status'), select([['', t('lbl.all')], ...TST.map((x) => [x, t('status.' + x)])], '', { onchange: (e) => { f.status = e.target.value; load().catch(fail); } })),
         canTransfer() ? h('a', { class: 'btn primary', href: '#/transfer-new' }, icon('plus'), t('tf.new')) : null),
-      box);
+      box, pg.el);
     await load();
   }
 
@@ -1253,13 +1325,18 @@
     let lines = [blank()];
     const st = { mode: 'APPROVAL', from: from[0] && from[0].warehouse_id, to: '', date: today(), remark: '' };
     const body = h('tbody');
+    const lpg = makePager(() => { renderLines(); body.closest('.lines-card').scrollIntoView({ block: 'nearest' }); });
+    const bad = (i, msg) => { lpg.showIndex(i); renderLines(); toast(msg, 'err'); };
     const lineCount = h('span', { class: 'hint' });
     let avail = {};
     let busy = false;
     const refreshTotals = () => { lineCount.textContent = t('xl.count', { n: lines.filter((l) => l.product).length }); };
     function renderLines() {
       refreshTotals();
-      body.replaceChildren(...lines.map((ln, idx) => {
+      lpg.total = lines.length; lpg.render();
+      const off = lpg.start();
+      body.replaceChildren(...lpg.slice(lines).map((ln, i) => {
+        const idx = off + i;
         const dl = 'tdl' + idx;
         const search = h('input', { type: 'text', list: dl, class: 'psearch', placeholder: t('lbl.searchProduct'), autocomplete: 'off',
           value: ln.product ? `${ln.product.product_code} — ${ln.product.name}` : ln.text || '',
@@ -1278,7 +1355,7 @@
             if (!p) { ln.product = null; toast(t('err.PRODUCT_NOT_FOUND'), 'err'); renderLines(); return; }
             if (ln.product && ln.product.product_id === p.product_id) return;
             ln.product = p; ln.q = emptyQ(); renderLines();
-            const inp = body.querySelectorAll('tr')[idx].querySelector('input.uq:not([disabled])');
+            const inp = body.querySelectorAll('tr')[idx - off].querySelector('input.uq:not([disabled])');
             if (inp) inp.focus();
           } });
         const totalCell = h('td', { class: 'num tot' });
@@ -1306,12 +1383,12 @@
         const where = t('lbl.line') + ' ' + (i + 1) + ': ';
         if (!ln.product) {
           if (lines.length > 1 && !ln.q.some((x) => numOr0(x))) continue;
-          toast(where + t('err.PRODUCT_NOT_FOUND'), 'err'); return;
+          bad(i, where + t('err.PRODUCT_NOT_FOUND')); return;
         }
         const parts = qItems(ln.product, ln.q);
         const base = qtyBase(ln.product, ln.q);
-        if (!parts.length || !(base > 0) || !Number.isInteger(base) || ln.q.some((x) => numOr0(x) < 0)) { toast(where + t('err.BAD_QTY'), 'err'); return; }
-        if (items.some((x) => x.product_id === ln.product.product_id)) { toast(where + t('err.DUP_PRODUCT'), 'err'); return; }
+        if (!parts.length || !(base > 0) || !Number.isInteger(base) || ln.q.some((x) => numOr0(x) < 0)) { bad(i, where + t('err.BAD_QTY')); return; }
+        if (items.some((x) => x.product_id === ln.product.product_id)) { bad(i, where + t('err.DUP_PRODUCT')); return; }
         const one = parts.length === 1 && Number.isInteger(numOr0(parts[0].qty));
         items.push({ product_id: ln.product.product_id, unit_code: one ? parts[0].unit_code : 'PC', qty: one ? Number(parts[0].qty) : base });
       }
@@ -1340,8 +1417,8 @@
       h('div', { class: 'card lines-card' },
         h('div', { class: 'lines-head' }, h('b', {}, icon('list'), t('uq.items')), lineCount),
         h('div', { class: 'tablewrap' }, h('table', { class: 'lines' }, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), unitHeaders(),
-          h('th', { class: 'num' }, t('uq.total')), h('th', {}, t('uq.availableFrom')), h('th', {}, t('lbl.status')), h('th', {}))), body))),
-      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { lines.push(blank()); renderLines(); } }, icon('plus'), t('btn.addLine')),
+          h('th', { class: 'num' }, t('uq.total')), h('th', {}, t('uq.availableFrom')), h('th', {}, t('lbl.status')), h('th', {}))), body), lpg.el)),
+      h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { lines.push(blank()); lpg.showIndex(lines.length - 1); renderLines(); const ins = body.querySelectorAll('input.psearch'); if (ins.length) ins[ins.length - 1].focus(); } }, icon('plus'), t('btn.addLine')),
         h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: submit }, t('btn.save'))));
   }
 
@@ -1521,13 +1598,16 @@
       const sv = String(v);
       return hasKey('doc.' + sv) ? t('doc.' + sv) : hasKey('status.' + sv) ? t('status.' + sv) : hasKey('tf.mode.' + sv) ? t('tf.mode.' + sv) : sv;
     };
-    async function run() {
+    const rpg = makePager(() => { run(true); out.scrollIntoView({ block: 'nearest' }); });
+    async function run(keep) {
+      if (!keep) rpg.page = 0;
       try {
-        const r = await api('/reports/' + f.name + qs({ ...params(), limit: 200 }));
+        const r = await api('/reports/' + f.name + qs({ ...params(), limit: rpg.size, offset: rpg.start() }));
         if (main() !== V.el) return;
-        info.textContent = t('rep.total', { n: fmtNum(r.total) }) + (r.truncated ? ' ' + t('rep.truncated') : '') + (r.total > 200 ? ' · ' + t('rep.previewLimit') : '');
+        info.textContent = t('rep.total', { n: fmtNum(r.total) }) + (r.truncated ? ' ' + t('rep.truncated') : '');
+        rpg.total = Math.min(r.total, 50000); rpg.render();
         out.replaceChildren(table(r.columns.map((c) => ({ label: c.text, num: ['n', 'f'].includes(c.kind) })),
-          r.rows.map((row) => h('tr', { class: ['LOW', 'OUT'].includes(row.status) || (f.name === 'deposits' && row.due && row.due < today() && ['OPEN', 'PARTIAL'].includes(row.status)) ? 'low' : '' }, r.columns.map((c) => td(cell(c.kind, row[c.key], r.labels), ['n', 'f'].includes(c.kind)))))));
+          r.rows.map((row) => h('tr', { class: ['LOW', 'OUT'].includes(row.status) || (f.name === 'deposits' && row.due && row.due < today() && ['OPEN', 'PARTIAL'].includes(row.status)) ? 'low' : '' }, r.columns.map((c) => td(cell(c.kind, row[c.key], r.labels), ['n', 'f'].includes(c.kind))))), { paged: false }), rpg.el);
       } catch (e) { fail(e); }
     }
     function drawFilters() {
@@ -1739,9 +1819,11 @@
   async function pageDeposits() {
     const f = { open_only: true, status: '', warehouse_id: '', q: '' };
     const box = h('div');
-    async function load() {
+    const pg = makePager(() => load(true));
+    async function load(keep) {
+      if (!keep) pg.page = 0;
       try {
-        const rows = await api('/deposits' + qs({ ...f, limit: 300 }));
+        const rows = pg.take(await api('/deposits' + qs({ ...f, ...pg.q() })));
         box.replaceChildren(table(
           [t('dep.no'), t('lbl.date'), t('dep.due'), t('lbl.customer'), t('lbl.warehouse'), t('dep.saleBill'), { label: t('lbl.lines'), num: true }, { label: t('dep.remainingPc'), num: true }, t('lbl.status')],
           rows.map((r) => h('tr', { class: 'click' + (r.due_date && r.due_date < today() && ['OPEN', 'PARTIAL'].includes(r.status) ? ' low' : ''), onclick: () => { location.hash = '#/deposit/' + r.deposit_id; } },
@@ -1756,7 +1838,7 @@
           { onchange: (e) => { f.open_only = e.target.value === 'open'; f.status = e.target.value === 'open' ? '' : e.target.value; load(); } })),
         field(t('lbl.warehouse'), select(whOptions(S.whs.filter((w) => w.warehouse_type === 'PHYSICAL'), true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
         field(t('dep.search'), h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) }))),
-      box);
+      box, pg.el);
     load();
   }
 

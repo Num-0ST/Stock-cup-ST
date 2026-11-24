@@ -996,3 +996,16 @@ Object.assign(I18N.lo, {
 Object.assign(I18N.th, { 'lbl.filters': 'ตัวกรอง' });
 Object.assign(I18N.en, { 'lbl.filters': 'Filters' });
 Object.assign(I18N.lo, { 'lbl.filters': 'ຕົວກອງ' });
+// paging
+Object.assign(I18N.th, {
+  'pg.label': 'แบ่งหน้า', 'pg.showing': 'แสดง {from}–{to} จาก {total} รายการ', 'pg.showingOpen': 'แสดงรายการที่ {from}–{to}',
+  'pg.page': 'หน้า {n}', 'pg.first': 'หน้าแรก', 'pg.prev': 'หน้าก่อน', 'pg.next': 'หน้าถัดไป', 'pg.last': 'หน้าสุดท้าย', 'pg.perPage': 'แถวต่อหน้า',
+});
+Object.assign(I18N.en, {
+  'pg.label': 'Pages', 'pg.showing': 'Showing {from}–{to} of {total}', 'pg.showingOpen': 'Showing {from}–{to}',
+  'pg.page': 'Page {n}', 'pg.first': 'First page', 'pg.prev': 'Previous page', 'pg.next': 'Next page', 'pg.last': 'Last page', 'pg.perPage': 'Rows per page',
+});
+Object.assign(I18N.lo, {
+  'pg.label': 'ແບ່ງໜ້າ', 'pg.showing': 'ສະແດງ {from}–{to} ຈາກ {total} ລາຍການ', 'pg.showingOpen': 'ສະແດງລາຍການທີ {from}–{to}',
+  'pg.page': 'ໜ້າ {n}', 'pg.first': 'ໜ້າທຳອິດ', 'pg.prev': 'ໜ້າກ່ອນ', 'pg.next': 'ໜ້າຖັດໄປ', 'pg.last': 'ໜ້າສຸດທ້າຍ', 'pg.perPage': 'ແຖວຕໍ່ໜ້າ',
+});
