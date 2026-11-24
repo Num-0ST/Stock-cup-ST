@@ -190,7 +190,7 @@ def normalize_options(o: dict | None, batch_doc_type: str) -> dict:
         dt = r.get("doc_type")
         if not prefix:
             continue
-        if dt not in engine.DOC_TYPES:
+        if dt not in engine.DOC_TYPES or dt == "ADJUSTMENT":       # adjustments are entered by hand only
             raise BadParams("ประเภทเอกสารในกฎไม่ถูกต้อง", field="doc_type_rules")
         rules.append({"prefix": prefix, "doc_type": dt})
     wmap = {}

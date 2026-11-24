@@ -152,7 +152,8 @@ def r_movements(conn, whs, p):
     df, dto = _dates(p, 7)
     return conn.execute(
         """SELECT t.txn_date, w.warehouse_code, p.product_code, p.name AS product_name,
-                  COALESCE(d.doc_type, t.txn_type) AS type,
+                  CASE WHEN t.txn_type IN ('ADJUST_IN','ADJUST_OUT') THEN t.txn_type
+                       ELSE COALESCE(d.doc_type, t.txn_type) END AS type,
                   COALESCE(d.doc_no, a.adjust_no, tr.transfer_no, '') AS doc_no,
                   t.qty_in, t.qty_out, t.balance_after, usr.full_name AS user_name
            FROM stock_transactions t JOIN products p USING (product_id) JOIN warehouses w USING (warehouse_id)

@@ -8,7 +8,9 @@
     lang: localStorage.getItem('wms_lang') || 'th',
     me: null, units: [], whs: [], categories: [],
   };
-  const DOC_TYPES = ['RECEIVING', 'SALE', 'WITHDRAWAL', 'CUSTOMER_RETURN', 'SUPPLIER_RETURN'];
+  const DOC_TYPES = ['RECEIVING', 'SALE', 'WITHDRAWAL', 'CUSTOMER_RETURN', 'SUPPLIER_RETURN', 'ADJUSTMENT'];
+  const ADJ_REASONS = ['DAMAGED', 'EXPIRED', 'LOST', 'FOUND', 'RECOUNT', 'SAMPLE', 'OTHER'];
+  const ADJ_DEFAULT_DIR = { FOUND: 'IN' };   // everything else usually lowers the stock
   const PARTY = { SALE: 'customer', CUSTOMER_RETURN: 'customer', RECEIVING: 'supplier', SUPPLIER_RETURN: 'supplier' };
 
   // ---------------------------------------------------------------- helpers
@@ -262,7 +264,8 @@
       ['daily', 'navg.daily', 'daily', [
         ['#/stock', 'nav.stock', 'stock'], ['#/docs', 'nav.docs', 'docs'],
         canScan() ? ['#/scan', 'nav.scan', 'scan'] : null,
-        ['#/deposits', 'nav.deposits', 'deposits'], ['#/transfers', 'nav.transfers', 'transfers'], ['#/counts', 'nav.counts', 'counts']]],
+        ['#/deposits', 'nav.deposits', 'deposits'], ['#/transfers', 'nav.transfers', 'transfers'], ['#/counts', 'nav.counts', 'counts'],
+        myDocTypes().includes('ADJUSTMENT') ? ['#/new/ADJUSTMENT', 'nav.adjust', 'adjust'] : null]],
       canImport() ? ['import', 'navg.import', 'importg', [['#/import', 'nav.import', 'import'], ['#/imports', 'nav.imports', 'imports']]] : null,
       ['reports', 'navg.reports', 'reportsg', [['#/movements', 'nav.movements', 'movements'], ['#/reports', 'nav.reports', 'reports']]],
       ['setup', 'navg.setup', 'setup', [
@@ -270,7 +273,7 @@
         isAdmin() ? ['#/users', 'nav.users', 'users'] : null]],
     ].filter(Boolean).map(([id, label, ic, items]) => [id, label, ic, items.filter(Boolean)]);
     const cur = location.hash.split('/')[1] || 'dashboard';
-    const isCur = (href) => href.split('/')[1] === cur;
+    const isCur = (href) => (href.split('/').length > 2 ? location.hash === href : href.split('/')[1] === cur);
     let openSet;
     try { openSet = new Set(JSON.parse(navStore.get('wms_nav_open', '["daily"]'))); } catch (_) { openSet = new Set(['daily']); }
     const layout = h('div', { class: 'layout' + (navStore.get('wms_nav_collapsed', '0') === '1' ? ' collapsed' : '') });
@@ -480,6 +483,7 @@
     }
     const kv = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('b', {}, v ?? ''));
     const hasDep = d.items.some((i) => i.deposited_base > 0);
+    const isAdj = d.doc_type === 'ADJUSTMENT';
     const groups = groupItems(d.items);
     if (d.bill_scan_id) act.unshift(h('button', { onclick: () => showBillImage(d.bill_scan_id) }, icon('receipt'), t('scan.viewBill')));
     V(
@@ -490,13 +494,16 @@
         kv(t('lbl.party'), d.customer_name || d.supplier_name || '—'), kv(t('lbl.createdBy'), d.created_by_name + ' ' + fmtDateTime(d.created_at)),
         d.posted_at ? kv(t('lbl.postedBy'), (d.posted_by_name || '') + ' ' + fmtDateTime(d.posted_at)) : null,
         d.reverses_document_id ? kv(t('lbl.reversesDoc'), h('a', { href: '#/doc/' + d.reverses_document_id }, '#' + d.reverses_document_id)) : null,
+        d.adjust_reason ? kv(t('adj.reason'), t('adj.r.' + d.adjust_reason)) : null,
         d.remark ? kv(t('lbl.remark'), d.remark) : null),
       h('div', { class: 'card lines-card' },
         h('div', { class: 'lines-head' }, h('b', {}, icon('list'), t('uq.items')), h('span', { class: 'hint' }, t('xl.count', { n: groups.length })),
           h('span', { class: 'hint' }, t('uq.totalPc', { n: fmtNum(groups.reduce((a, g) => a + g.base, 0)) }))),
-        table(['#', t('lbl.code'), t('lbl.product'), ...[1, 2, 3].flatMap((n) => [{ label: t('uq.qtyN', { n }), num: true }, t('uq.unitN', { n })]),
+        table(['#', t('lbl.code'), t('lbl.product'), ...(isAdj ? [t('adj.dir')] : []), ...[1, 2, 3].flatMap((n) => [{ label: t('uq.qtyN', { n }), num: true }, t('uq.unitN', { n })]),
           { label: t('uq.total'), num: true }, ...(hasDep ? [{ label: t('dep.colDepositPc'), num: true }] : [])],
-        groups.map((g, n) => h('tr', {}, td(n + 1), td(g.product_code), td(g.product_name), unitTextCells(g),
+        groups.map((g, n) => h('tr', {}, td(n + 1), td(g.product_code), td(g.product_name),
+          isAdj ? td(h('span', { class: 'badge ' + (g.adj_sign > 0 ? 'adj-in' : 'adj-out') }, g.adj_sign > 0 ? t('adj.in') : t('adj.out'))) : null,
+          unitTextCells(g),
           td(h('b', {}, fmtNum(g.base)), true), hasDep ? td(g.deposited ? fmtNum(g.deposited) : '', true) : null)))),
       d.deposits && d.deposits.length ? h('div', { class: 'card' }, h('h3', {}, t('nav.deposits')),
         table([t('dep.no'), t('lbl.date'), { label: t('dep.remainingPc'), num: true }, t('lbl.status')],
@@ -517,10 +524,12 @@
     S.scanDraft = null;
     const isSale = type === 'SALE';
     const isOut = OUTFLOW.includes(type);
+    const isAdj = type === 'ADJUSTMENT';
     const key = uuid();
-    const blank = () => ({ product: null, q: emptyQ(), dep: '' });
+    const state = { warehouse_id: whs[0] && whs[0].warehouse_id, doc_date: today(), doc_no: '', party: '', remark: '', reason: '' };
+    const defDir = () => ADJ_DEFAULT_DIR[state.reason] || 'OUT';
+    const blank = () => ({ product: null, q: emptyQ(), dep: '', dir: defDir(), dirSet: false });
     let lines = [blank()];
-    const state = { warehouse_id: whs[0] && whs[0].warehouse_id, doc_date: today(), doc_no: '', party: '', remark: '' };
     if (draft) {
       if (draft.warehouse_id && whs.some((w) => w.warehouse_id === draft.warehouse_id)) state.warehouse_id = draft.warehouse_id;
       state.doc_date = draft.doc_date || today();
@@ -602,19 +611,36 @@
         const have = ln.product ? (avail[ln.product.product_id] || 0) : null;
         const update = () => {
           const b = ln.product ? qtyBase(ln.product, ln.q) : 0;
-          totalCell.textContent = b ? fmtNum(b) : '';
+          totalCell.textContent = b ? (isAdj ? (ln.dir === 'IN' ? '+' : '−') : '') + fmtNum(b) : '';
+          totalCell.className = 'num tot' + (isAdj && b ? (ln.dir === 'IN' ? ' plus' : ' minus') : '');
           if (isOut) stateCell.replaceChildren(stockState(b, have) || '');
+          if (isAdj) {
+            const after = have == null ? null : have + (ln.dir === 'IN' ? b : -b);
+            stateCell.replaceChildren(after == null || !b ? '' : after < 0 ? h('span', { class: 'sb no' }, t('uq.short'))
+              : h('b', { class: 'after' }, fmtNum(after)));
+          }
           refreshTotals();
         };
+        // + / − switch for adjustment lines
+        const dirCell = isAdj ? h('td', {}, h('div', { class: 'seg', role: 'group', 'aria-label': t('adj.dir') },
+          ['IN', 'OUT'].map((d) => h('button', { type: 'button', class: 'seg-btn ' + (d === 'IN' ? 'in' : 'out') + (ln.dir === d ? ' on' : ''),
+            'aria-pressed': String(ln.dir === d), onclick: (e) => {
+              ln.dir = d; ln.dirSet = true;
+              e.currentTarget.parentNode.querySelectorAll('button').forEach((x) => {
+                const on = x === e.currentTarget; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on));
+              });
+              update();
+            } }, d === 'IN' ? t('adj.in') : t('adj.out'))))) : null;
         const row = h('tr', { class: (ln.warnings || []).length ? 'warnrow' : '' },
           td(idx + 1),
           h('td', { class: 'pcell' }, search, h('datalist', { id: dl }), src, warn),
+          dirCell,
           unitCells(ln.product, ln.q, update),
           totalCell,
           isSale ? h('td', { class: 'num' }, h('input', { class: 'qty dep', type: 'number', min: '0', step: '1', value: ln.dep, title: t('dep.lineHint'), disabled: !ln.product,
             oninput: (e) => { ln.dep = e.target.value; } })) : null,
           h('td', { class: 'avail' }, availBadges(ln.product, have)),
-          isOut ? stateCell : null,
+          isOut || isAdj ? stateCell : null,
           h('td', {}, lines.length > 1 ? h('button', { class: 'link', type: 'button', title: t('btn.delete'), onclick: () => { lines.splice(idx, 1); renderLines(); } }, '✕') : null));
         update();
         return row;
@@ -699,11 +725,14 @@
           const b = Math.round(numOr0(pt.qty) * pt.factor);
           const take = Math.min(dep, b);
           dep -= take;
-          items.push({ product_id: ln.product.product_id, unit_code: pt.unit_code, qty: pt.qty, deposit_qty_base: take || null });
+          items.push({ product_id: ln.product.product_id, unit_code: pt.unit_code, qty: pt.qty, deposit_qty_base: take || null,
+            direction: isAdj ? ln.dir : null });
         }
       }
       if (!items.length) { toast(t('err.NO_ITEMS'), 'err'); return; }
+      if (isAdj && !state.reason) { toast(t('err.ADJUST_REASON_REQUIRED'), 'err'); reasonSel.focus(); return; }
       const payload = {
+        adjust_reason: isAdj ? state.reason : null,
         doc_type: type, warehouse_id: Number(state.warehouse_id), doc_date: state.doc_date, doc_no: state.doc_no || null,
         remark: state.remark || null, items, post,
         customer_id: partyKind === 'customer' && state.party ? Number(state.party) : null,
@@ -719,6 +748,11 @@
       } catch (e) { fail(e); } finally { busy = false; }
     }
 
+    const reasonSel = select([['', '—'], ...ADJ_REASONS.map((r) => [r, t('adj.r.' + r)])], state.reason, { required: true, onchange: (e) => {
+      state.reason = e.target.value;
+      lines.forEach((l) => { if (!l.dirSet) l.dir = defDir(); });   // lines not switched by hand follow the reason
+      renderLines();
+    } });
     const partyBox = h('div');
     function renderParty() {
       const sel = select([['', '—'], ...parties.filter((p) => p.is_active).map((p) => [p.id, p.code + ' — ' + p.name])], state.party, { onchange: (e) => { state.party = e.target.value; } });
@@ -740,16 +774,19 @@
         field(t('lbl.date'), h('input', { type: 'date', value: state.doc_date, onchange: (e) => { state.doc_date = e.target.value; } })),
         field(t('lbl.docNoAuto'), h('input', { type: 'text', maxlength: 50, value: state.doc_no, oninput: (e) => { state.doc_no = e.target.value; } })),
         partyKind ? field(partyKind === 'customer' ? t('lbl.customer') : t('lbl.supplier'), partyBox) : null,
+        isAdj ? field(t('adj.reason') + ' *', reasonSel) : null,
         field(t('lbl.remark'), h('input', { type: 'text', value: state.remark, oninput: (e) => { state.remark = e.target.value; } }), 'wide')),
       xlBar, fileReport,
       h('div', { class: 'scanbar' }, scanInput, barcodeCameraButton(addByCode)),
       h('div', { class: 'card lines-card' },
         h('div', { class: 'lines-head' }, h('b', {}, icon('list'), t('uq.items')), lineCount, totalBox),
         h('div', { class: 'tablewrap' },
-          h('table', { class: 'lines' }, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), unitHeaders(),
+          h('table', { class: 'lines' }, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')),
+            isAdj ? h('th', {}, t('adj.dir')) : null, unitHeaders(),
             h('th', { class: 'num' }, t('uq.total')),
             isSale ? h('th', { class: 'num', title: t('dep.lineHint') }, t('dep.colDepositPc')) : null,
-            h('th', {}, t('uq.available')), isOut ? h('th', {}, t('lbl.status')) : null, h('th', {}))), body), lpg.el)),
+            h('th', {}, t('uq.available')), isOut ? h('th', {}, t('lbl.status')) : null, isAdj ? h('th', { class: 'num' }, t('adj.after')) : null,
+            h('th', {}))), body), lpg.el)),
       isSale ? h('p', { class: 'hint' }, t('dep.lineHintPc')) : null,
       h('div', { class: 'actions' },
         h('button', { type: 'button', onclick: () => { lines.push(blank()); lpg.showIndex(lines.length - 1); renderLines(); const ins = body.querySelectorAll('input.psearch'); if (ins.length) ins[ins.length - 1].focus(); } }, icon('plus'), t('btn.addLine')),
@@ -763,6 +800,7 @@
     ];
     V(h('p', {}, h('a', { href: '#/docs' }, '← ' + t('nav.docs'))),
       h('h2', {}, t('btn.new') + ' ' + docTypeLabel(type), draft ? h('span', { class: 'badge scan' }, icon('camera'), t('scan.fromBill')) : null),
+      isAdj ? h('p', { class: 'hint' }, t('adj.hint')) : null,
       warnings,
       draft && draft.imageUrl
         ? h('div', { class: 'newdoc-split' }, h('div', {}, form),
@@ -2099,8 +2137,8 @@
     const out = [];
     for (const it of items) {
       const last = out[out.length - 1];
-      if (last && last.product_id === it.product_id) last.items.push(it);
-      else out.push({ product_id: it.product_id, product_code: it.product_code, product_name: it.product_name, items: [it] });
+      if (last && last.product_id === it.product_id && (last.adj_sign || null) === (it.adj_sign || null)) last.items.push(it);
+      else out.push({ product_id: it.product_id, product_code: it.product_code, product_name: it.product_name, adj_sign: it.adj_sign || null, items: [it] });
     }
     for (const g of out) {
       g.items.sort((a, b) => b.conversion_factor - a.conversion_factor);

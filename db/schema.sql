@@ -178,6 +178,8 @@ CREATE TABLE stock_documents (
     import_batch_id BIGINT REFERENCES import_batches(batch_id),
     reverses_document_id BIGINT REFERENCES stock_documents(document_id),
     remark         TEXT,
+    adjust_reason  VARCHAR(20) CONSTRAINT ck_sd_adjust_reason
+                   CHECK (adjust_reason IN ('DAMAGED','EXPIRED','LOST','FOUND','RECOUNT','SAMPLE','OTHER')),
     created_by     BIGINT NOT NULL REFERENCES users(user_id),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     posted_by      BIGINT REFERENCES users(user_id),
@@ -198,6 +200,7 @@ CREATE TABLE stock_document_items (
     conversion_factor INT NOT NULL CHECK (conversion_factor > 0), -- SNAPSHOT of rate at document time
     base_qty       BIGINT NOT NULL CHECK (base_qty > 0),          -- qty * factor, in PC
     deposit_qty_base BIGINT NOT NULL DEFAULT 0,                   -- part of a SALE line the customer leaves in the warehouse
+    adj_sign       SMALLINT CONSTRAINT ck_sdi_adj_sign CHECK (adj_sign IN (-1, 1)),  -- ADJUSTMENT lines: +1 raise / -1 lower
     UNIQUE (document_id, line_no),
     CONSTRAINT ck_sdi_deposit_qty CHECK (deposit_qty_base >= 0 AND deposit_qty_base <= base_qty)
 );

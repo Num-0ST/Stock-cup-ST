@@ -65,13 +65,21 @@ class IdempotencyConflict(StockError):
 
 # ---------------------------------------------------------------- constants
 
-DOC_TYPES = ("RECEIVING", "SALE", "WITHDRAWAL", "CUSTOMER_RETURN", "SUPPLIER_RETURN")
+DOC_TYPES = ("RECEIVING", "SALE", "WITHDRAWAL", "CUSTOMER_RETURN", "SUPPLIER_RETURN", "ADJUSTMENT")
+ADJUST_REASONS = ("DAMAGED", "EXPIRED", "LOST", "FOUND", "RECOUNT", "SAMPLE", "OTHER")
 INCREASES = {"RECEIVING", "CUSTOMER_RETURN"}
 DECREASES = {"SALE", "WITHDRAWAL", "SUPPLIER_RETURN"}
 PREFIX = {
     "RECEIVING": "RCV", "SALE": "SAL", "WITHDRAWAL": "WTH",
-    "CUSTOMER_RETURN": "CRT", "SUPPLIER_RETURN": "SRT",
+    "CUSTOMER_RETURN": "CRT", "SUPPLIER_RETURN": "SRT", "ADJUSTMENT": "ADJ",
 }
+
+
+def _line_sign(doc_type: str, item: dict) -> int:
+    """+1 when the line adds stock, -1 when it removes it. Adjustment lines carry their own direction."""
+    if doc_type == "ADJUSTMENT":
+        return int(item["adj_sign"])
+    return 1 if doc_type in INCREASES else -1
 
 # ---------------------------------------------------------------- helpers
 
@@ -231,6 +239,12 @@ def create_document(conn: psycopg.Connection, data: dict, user_id: int) -> int:
     doc_date = data.get("doc_date") or date.today()
     if isinstance(doc_date, str):
         doc_date = date.fromisoformat(doc_date)
+    reason = None
+    if doc_type == "ADJUSTMENT":
+        reason = data.get("adjust_reason")
+        if reason not in ADJUST_REASONS:
+            raise ValidationFailed("กรุณาเลือกเหตุผลการปรับสต็อก", field="adjust_reason", allowed=list(ADJUST_REASONS),
+                                   code_hint="ADJUST_REASON_REQUIRED")
 
     with conn.transaction():
         cur = conn.cursor()
@@ -242,11 +256,11 @@ def create_document(conn: psycopg.Connection, data: dict, user_id: int) -> int:
                 cur.execute(
                     """INSERT INTO stock_documents
                          (doc_type, doc_no, doc_date, warehouse_id, customer_id, supplier_id, status,
-                          source, import_batch_id, remark, created_by)
-                       VALUES (%s,%s,%s,%s,%s,%s,'DRAFT',%s,%s,%s,%s) RETURNING document_id""",
+                          source, import_batch_id, remark, adjust_reason, created_by)
+                       VALUES (%s,%s,%s,%s,%s,%s,'DRAFT',%s,%s,%s,%s,%s) RETURNING document_id""",
                     (doc_type, doc_no, doc_date, data["warehouse_id"], data.get("customer_id"),
                      data.get("supplier_id"), data.get("source", "MANUAL"), data.get("import_batch_id"),
-                     data.get("remark"), user_id),
+                     data.get("remark"), reason, user_id),
                 )
                 document_id = cur.fetchone()["document_id"]
         except psycopg.errors.UniqueViolation:
@@ -269,11 +283,18 @@ def create_document(conn: psycopg.Connection, data: dict, user_id: int) -> int:
             dep_base = _deposit_base(item, factor, base, line_no, doc_type)
             if dep_base:
                 has_deposit = True
+            adj_sign = None
+            if doc_type == "ADJUSTMENT":
+                direction = str(item.get("direction") or "").upper()
+                if direction not in ("IN", "OUT"):
+                    raise ValidationFailed(f"บรรทัด {line_no}: เลือกว่าจะปรับเพิ่มหรือปรับลด", line=line_no,
+                                           code_hint="ADJUST_DIRECTION_REQUIRED")
+                adj_sign = 1 if direction == "IN" else -1
             cur.execute(
                 """INSERT INTO stock_document_items
-                     (document_id, line_no, product_id, unit_id, qty, conversion_factor, base_qty, deposit_qty_base)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (document_id, line_no, product["product_id"], unit_id, qty, factor, int(base), dep_base),
+                     (document_id, line_no, product_id, unit_id, qty, conversion_factor, base_qty, deposit_qty_base, adj_sign)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (document_id, line_no, product["product_id"], unit_id, qty, factor, int(base), dep_base, adj_sign),
             )
         if has_deposit and not data.get("customer_id"):
             raise ValidationFailed("บิลที่มีของฝากคลังต้องระบุลูกค้า", field="customer_id", code_hint="DEPOSIT_NEEDS_CUSTOMER")
@@ -318,28 +339,30 @@ def post_document(conn: psycopg.Connection, document_id: int, user_id: int) -> i
 
         wh = doc["warehouse_id"]
         balances = _lock_balances(cur, wh, [i["product_id"] for i in items])
-        sign = 1 if doc["doc_type"] in INCREASES else -1
+        adjust = doc["doc_type"] == "ADJUSTMENT"
 
         # simulate every line first so we can report all shortages at once
         sim = dict(balances)
         planned = []
         need: dict[int, int] = {}
         for it in items:
+            sign = _line_sign(doc["doc_type"], it)
             sim[it["product_id"]] += sign * it["base_qty"]
-            need[it["product_id"]] = need.get(it["product_id"], 0) + it["base_qty"]
-            planned.append((it, sim[it["product_id"]]))
-        if sign < 0:
-            shortages = [(pid, balances[pid], need[pid]) for pid, q in sim.items() if q < 0]
-            if shortages:
-                raise _shortage_error(cur, shortages, "สต็อกไม่พอ ไม่สามารถ POST เอกสารได้")
+            if sign < 0:
+                need[it["product_id"]] = need.get(it["product_id"], 0) + it["base_qty"]
+            planned.append((it, sign, sim[it["product_id"]]))
+        shortages = [(pid, balances[pid], need.get(pid, 0)) for pid, q in sim.items() if q < 0]
+        if shortages:
+            raise _shortage_error(cur, shortages, "สต็อกไม่พอ ไม่สามารถ POST เอกสารได้")
 
-        for it, bal_after in planned:
+        for it, sign, bal_after in planned:
+            txn_type = ("ADJUST_IN" if sign > 0 else "ADJUST_OUT") if adjust else doc["doc_type"]
             cur.execute(
                 """INSERT INTO stock_transactions
                      (txn_date, warehouse_id, product_id, txn_type, qty_in, qty_out, balance_after,
                       document_id, document_item_id, created_by)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (doc["doc_date"], wh, it["product_id"], doc["doc_type"],
+                (doc["doc_date"], wh, it["product_id"], txn_type,
                  it["base_qty"] if sign > 0 else 0, it["base_qty"] if sign < 0 else 0,
                  bal_after, document_id, it["item_id"], user_id),
             )
@@ -401,8 +424,8 @@ def reverse_document(conn: psycopg.Connection, document_id: int, user_id: int, r
         )
         rev_id = cur.fetchone()["document_id"]
         cur.execute(
-            """INSERT INTO stock_document_items (document_id, line_no, product_id, unit_id, qty, conversion_factor, base_qty)
-               SELECT %s, line_no, product_id, unit_id, qty, conversion_factor, base_qty
+            """INSERT INTO stock_document_items (document_id, line_no, product_id, unit_id, qty, conversion_factor, base_qty, adj_sign)
+               SELECT %s, line_no, product_id, unit_id, qty, conversion_factor, base_qty, adj_sign
                FROM stock_document_items WHERE document_id=%s""", (rev_id, document_id))
 
         for t, bal_after in planned:

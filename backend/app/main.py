@@ -172,6 +172,8 @@ def require_doc_write(u: dict, doc_type: str, warehouse_id: int) -> None:
         raise Forbidden("บัญชีนี้ดูข้อมูลได้อย่างเดียว")
     if u["role_code"] == "SALES" and doc_type not in ("SALE", "CUSTOMER_RETURN"):
         raise Forbidden("ฝ่ายขายทำได้เฉพาะใบขายและรับคืนจากลูกค้า")
+    if doc_type == "ADJUSTMENT":                 # same people who may apply a stock count
+        require_role(u, "MANAGER", "STOREKEEPER")
     require_wh(u, warehouse_id, "can_transact")
 
 
@@ -195,6 +197,7 @@ class ItemIn(BaseModel):
     qty: Decimal
     deposit_qty: Optional[Decimal] = None      # SALE only: part the customer leaves in the warehouse (same unit)
     deposit_qty_base: Optional[int] = Field(None, ge=0)   # ... or the same in PC
+    direction: Optional[str] = None            # ADJUSTMENT only: "IN" raises the stock, "OUT" lowers it
 
 
 class DocumentIn(BaseModel):
@@ -205,6 +208,7 @@ class DocumentIn(BaseModel):
     customer_id: Optional[int] = None
     supplier_id: Optional[int] = None
     remark: Optional[str] = None
+    adjust_reason: Optional[str] = None        # ADJUSTMENT only: DAMAGED / EXPIRED / LOST / FOUND / RECOUNT / SAMPLE / OTHER
     items: list[ItemIn]
     post: bool = False
     bill_scan_id: Optional[int] = None         # set when the document was created from a scanned bill

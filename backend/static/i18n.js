@@ -1022,3 +1022,28 @@ Object.assign(I18N.lo, {
   'nav.categories': 'ໝວດສິນຄ້າ', 'cat.new': 'ໝວດໃໝ່', 'cat.namePh': 'ຊື່ໝວດ ເຊັ່ນ ເຄື່ອງດື່ມ', 'cat.added': 'ເພີ່ມໝວດ "{name}" ແລ້ວ',
   'cat.products': 'ຈຳນວນສິນຄ້າ', 'cat.disable': 'ປິດໃຊ້ງານ', 'cat.enable': 'ເປີດໃຊ້ງານ',
 });
+// stock adjustment documents
+Object.assign(I18N.th, {
+  'nav.adjust': 'ปรับสต็อก', 'doc.ADJUSTMENT': 'ใบปรับสต็อก', 'adj.reason': 'เหตุผลการปรับ', 'adj.dir': 'ปรับ', 'adj.in': '+ เพิ่ม', 'adj.out': '− ลด',
+  'adj.after': 'คงเหลือหลังปรับ',
+  'adj.hint': 'ใช้แก้ยอดสต็อกหลายรายการพร้อมกัน เช่น ของเสีย หมดอายุ สูญหาย หรือพบของเกิน แต่ละแถวเลือก "+ เพิ่ม" หรือ "− ลด" ได้ ถ้าต้องการตั้งยอดให้ตรงกับที่นับได้ ให้ใช้เมนู "ตรวจนับสต็อก"',
+  'adj.r.DAMAGED': 'สินค้าชำรุด / เสียหาย', 'adj.r.EXPIRED': 'สินค้าหมดอายุ', 'adj.r.LOST': 'สินค้าสูญหาย', 'adj.r.FOUND': 'พบสินค้าเกิน',
+  'adj.r.RECOUNT': 'แก้ยอดที่บันทึกผิด', 'adj.r.SAMPLE': 'ใช้เป็นตัวอย่าง / แจก', 'adj.r.OTHER': 'อื่นๆ (ระบุในหมายเหตุ)',
+  'err.ADJUST_REASON_REQUIRED': 'กรุณาเลือกเหตุผลการปรับสต็อก', 'err.ADJUST_DIRECTION_REQUIRED': 'กรุณาเลือกว่าจะปรับเพิ่มหรือปรับลด',
+});
+Object.assign(I18N.en, {
+  'nav.adjust': 'Stock adjustment', 'doc.ADJUSTMENT': 'Stock adjustment', 'adj.reason': 'Reason', 'adj.dir': 'Adjust', 'adj.in': '+ Add', 'adj.out': '− Remove',
+  'adj.after': 'Balance after',
+  'adj.hint': 'Correct several items at once — damaged, expired, lost or surplus goods. Choose "+ Add" or "− Remove" on each line. To set a product to the counted quantity, use "Stock count".',
+  'adj.r.DAMAGED': 'Damaged', 'adj.r.EXPIRED': 'Expired', 'adj.r.LOST': 'Lost / missing', 'adj.r.FOUND': 'Surplus found',
+  'adj.r.RECOUNT': 'Correct a wrong entry', 'adj.r.SAMPLE': 'Samples / giveaways', 'adj.r.OTHER': 'Other (see remark)',
+  'err.ADJUST_REASON_REQUIRED': 'Please choose a reason for the adjustment', 'err.ADJUST_DIRECTION_REQUIRED': 'Please choose add or remove',
+});
+Object.assign(I18N.lo, {
+  'nav.adjust': 'ປັບສະຕັອກ', 'doc.ADJUSTMENT': 'ໃບປັບສະຕັອກ', 'adj.reason': 'ເຫດຜົນການປັບ', 'adj.dir': 'ປັບ', 'adj.in': '+ ເພີ່ມ', 'adj.out': '− ຫຼຸດ',
+  'adj.after': 'ຄົງເຫຼືອຫຼັງປັບ',
+  'adj.hint': 'ໃຊ້ແກ້ຍອດສະຕັອກຫຼາຍລາຍການພ້ອມກັນ ເຊັ່ນ ເຄື່ອງເສຍ ໝົດອາຍຸ ເສຍຫາຍ ຫຼື ພົບເຄື່ອງເກີນ ແຕ່ລະແຖວເລືອກ "+ ເພີ່ມ" ຫຼື "− ຫຼຸດ" ໄດ້ ຖ້າຕ້ອງການຕັ້ງຍອດໃຫ້ກົງກັບທີ່ນັບໄດ້ ໃຫ້ໃຊ້ເມນູ "ກວດນັບສະຕັອກ"',
+  'adj.r.DAMAGED': 'ສິນຄ້າເປ່ເພ / ເສຍຫາຍ', 'adj.r.EXPIRED': 'ສິນຄ້າໝົດອາຍຸ', 'adj.r.LOST': 'ສິນຄ້າເສຍ / ຫາຍ', 'adj.r.FOUND': 'ພົບສິນຄ້າເກີນ',
+  'adj.r.RECOUNT': 'ແກ້ຍອດທີ່ບັນທຶກຜິດ', 'adj.r.SAMPLE': 'ໃຊ້ເປັນຕົວຢ່າງ / ແຈກ', 'adj.r.OTHER': 'ອື່ນໆ (ລະບຸໃນໝາຍເຫດ)',
+  'err.ADJUST_REASON_REQUIRED': 'ກະລຸນາເລືອກເຫດຜົນການປັບສະຕັອກ', 'err.ADJUST_DIRECTION_REQUIRED': 'ກະລຸນາເລືອກວ່າຈະປັບເພີ່ມ ຫຼື ປັບຫຼຸດ',
+});

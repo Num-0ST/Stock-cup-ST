@@ -342,8 +342,8 @@ table.lines th { white-space: nowrap; font-size: .82rem; }
 table.lines th, table.lines td { padding: .5rem .5rem; }
 table.lines th:first-child, table.lines td:first-child { padding-left: 1rem; }
 table.lines td { vertical-align: middle; }
-table.lines td.pcell { min-width: 260px; }
-table.lines input.psearch { width: 100%; min-width: 240px; }
+table.lines td.pcell { min-width: 220px; }
+table.lines input.psearch { width: 100%; min-width: 200px; }
 td.uqcell input.uq { width: 5.6rem; text-align: right; }
 input.uq[disabled] { background: #f2f4f7; border-color: var(--line); }
 td.ulabel { white-space: nowrap; color: var(--text-2); font-size: .86rem; }
@@ -419,3 +419,15 @@ table.lines.cnt td.uqcell input.uq { width: 7rem; }
 .catnew input { flex: 1; }
 .badge.active { background: var(--ok-bg); color: var(--ok); }
 .badge.inactive { background: #f2f4f7; color: var(--muted); }
+
+/* stock adjustment: + / − switch per line */
+.seg { display: inline-flex; border: 1px solid var(--line-input); border-radius: var(--radius-sm); overflow: hidden; }
+.seg-btn { border: 0; border-radius: 0; box-shadow: none; min-height: 38px; padding: .3rem .5rem; font-size: .86rem; background: #fff; color: var(--text-2); }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line-input); }
+.seg-btn.in.on { background: var(--ok); color: #fff; }
+.seg-btn.out.on { background: var(--danger); color: #fff; }
+td.tot.plus { color: var(--ok); } td.tot.minus { color: var(--danger); }
+b.after { font-variant-numeric: tabular-nums; }
+.badge.adj-in { background: var(--ok-bg); color: var(--ok); } .badge.adj-in::before, .badge.adj-out::before { display: none; }
+.badge.adj-out { background: var(--danger-bg); color: var(--danger); }
+@media (max-width: 640px) { .seg-btn { min-height: 44px; } }
