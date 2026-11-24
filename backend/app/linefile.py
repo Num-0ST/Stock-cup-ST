@@ -24,11 +24,11 @@ KEYS = {
     "code": ["รหัสสินค้า", "รหัส", "code", "item code", "itemcode", "sku", "product code", "productcode", "ລະຫັດ", "barcode", "บาร์โค้ด", "บาร์โค้ต"],
     "name": ["ชื่อสินค้า", "ชื่อ", "รายการ", "สินค้า", "name", "description", "product", "item", "ຊື່", "ລາຍການ", "ສິນຄ້າ"],
     "qty": ["จำนวน", "qty", "quantity", "ยอดยกมา", "ยอดคงเหลือ", "คงเหลือ", "ยอด", "balance", "on hand", "onhand", "stock",
-            "ຈຳນວນ", "ຍອດ", "ຄົງເຫຼືອ"],
+            "สต็อก", "สต๊อก", "ຈຳນວນ", "ຍອດ", "ຄົງເຫຼືອ", "ສະຕັອກ", "ສະຕ໊ອກ"],
     "unit": ["หน่วย", "unit", "uom", "ຫົວໜ່ວຍ"],
     "CT": ["ct", "ctn", "carton", "case", "ลัง", "หีบ", "ລັງ", "ແກັດ"],
-    "PK": ["pk", "pack", "แพ็ค", "แพ็ก", "แพค", "ห่อ", "ແພັກ", "ຫໍ່"],
-    "PC": ["pc", "pcs", "piece", "ชิ้น", "อัน", "ຊິ້ນ"],
+    "PK": ["pk", "pack", "แพ็ค", "แพ็ก", "แพค", "ห่อ", "ແພັກ", "ແພັກ", "ແພກ", "ຫໍ່"],
+    "PC": ["pc", "pcs", "piece", "ชิ้น", "อัน", "ຊິ້ນ", "ອັນ"],
 }
 NOT_QTY = re.compile(r"(เงิน|ราคา|มูลค่า|amount|price|value|cost|ต้นทุน|ລາຄາ|ມູນຄ່າ|ເງິນ)", re.I)
 
@@ -73,20 +73,36 @@ def _classify(cell) -> str | None:
     return None
 
 
-def _find_header(grid: list[list]) -> tuple[int, dict]:
-    """(row index, {role: column}) of the most header-like row among the first 20."""
-    best, best_cols = -1, {}
-    for r, row in enumerate(grid[:20]):
-        cols: dict[str, int] = {}
-        for c, cell in enumerate(row):
-            role = _classify(cell)
-            if role and role not in cols:
-                cols[role] = c
-        score = (2 if "code" in cols or "name" in cols else 0) + \
-                (2 if "qty" in cols or any(k.startswith("q_") for k in cols) else 0) + len(cols) * 0.1
-        if score >= 4 and score > (len(best_cols) and _score(best_cols)):
-            best, best_cols = r, cols
-    return best, best_cols
+def _roles(row: list) -> dict[str, int]:
+    cols: dict[str, int] = {}
+    for c, cell in enumerate(row):
+        role = _classify(cell)
+        if role and role not in cols:
+            cols[role] = c
+    return cols
+
+
+def _find_header(grid: list[list]) -> tuple[int, dict, int]:
+    """(header row index, {role: column}, first data row) of the most header-like row among the first 20.
+
+    A header may span two rows, e.g. "Code | Product | Stock" with "CT | PK | PC" under the merged "Stock" cell:
+    the unit columns of the second row are then added to the first row's columns."""
+    best, best_cols, best_start = -1, {}, 0
+    rows = grid[:21]
+    for r, row in enumerate(rows[:20]):
+        cols, start = _roles(row), r + 1
+        nxt = _roles(rows[r + 1]) if r + 1 < len(rows) else {}
+        units = {k: v for k, v in nxt.items() if k.startswith("q_") or k == "unit"}
+        # a data row carries a product code / name under those titles; a real second header row leaves them empty
+        # (or repeats the title, as merged cells do in some exports)
+        nrow = rows[r + 1] if units else []
+        own = [c for c in (cols.get("code"), cols.get("name")) if c is not None]
+        if units and own and all(c >= len(nrow) or not _cell_str(nrow[c]) or _norm(nrow[c]) == _norm(row[c]) for c in own):
+            cols = {**cols, **{k: v for k, v in units.items() if k not in cols}}
+            start = r + 2
+        if _score(cols) >= 4 and _score(cols) > (_score(best_cols) if best_cols else 0):
+            best, best_cols, best_start = r, cols, start
+    return best, best_cols, best_start
 
 
 def _score(cols: dict) -> float:
@@ -158,23 +174,27 @@ def parse(conn, data: bytes, filename: str) -> dict:
     best = None
     for sheet in readers.list_sheets(data, kind):
         grid, name = readers.read_grid(data, kind, sheet)
-        hrow, cols = _find_header(grid)
+        hrow, cols, start = _find_header(grid)
         if hrow < 0:
-            cols = _guess_columns(grid, idx)
+            cols, start = _guess_columns(grid, idx), 0
         if not cols:
             continue
-        cand = (_score(cols), name, grid, hrow, cols)
+        cand = (_score(cols), name, grid, hrow, cols, start)
         if best is None or cand[0] > best[0]:
             best = cand
     if best is None:
         raise readers.BadFile("ไม่พบคอลัมน์รหัสสินค้าและจำนวนในไฟล์", code_hint="NO_COLUMNS")
-    _, sheet, grid, hrow, cols = best
+    _, sheet, grid, hrow, cols, start = best
+    # quantity per unit column (ลัง | แพ็ค | ชิ้น) wins over a single "quantity" column, unless a unit column says
+    # which unit the quantity is in (a merged "Stock" title above CT/PK/PC is not a quantity column of its own)
+    if any(k.startswith("q_") for k in cols) and "unit" not in cols:
+        cols.pop("qty", None)
 
     lines: dict[tuple, dict] = {}
     unmatched, errors = [], []
     zero = 0
     unit_cols = {k[2:]: v for k, v in cols.items() if k.startswith("q_")}
-    for r in range(hrow + 1, len(grid)):
+    for r in range(start, len(grid)):
         row = grid[r]
         cell = lambda role: row[cols[role]] if role in cols and cols[role] < len(row) else None  # noqa: E731
         code, name = _cell_str(cell("code")), _cell_str(cell("name"))
@@ -227,32 +247,41 @@ def parse(conn, data: bytes, filename: str) -> dict:
         if bad:
             errors.append(bad)
             continue
-        if len(resolved) > 1:            # several unit columns -> one line in PC
-            pcs = sum(q * factors[u] for u, q in resolved)
-            resolved = [("PC", pcs)]
-        u, q = resolved[0]
-        if (q * factors[u]) != (q * factors[u]).to_integral_value():
-            errors.append({"row": rowno, "code": "NOT_WHOLE_PC", "product": p["product_code"], "qty": str(q), "unit": u})
+        # several unit columns (ลัง | แพ็ค | ชิ้น) stay separate, so each lands in its own unit box on the form
+        frac = next(((u, q) for u, q in resolved if (q * factors[u]) != (q * factors[u]).to_integral_value()), None)
+        if frac:
+            errors.append({"row": rowno, "code": "NOT_WHOLE_PC", "product": p["product_code"], "qty": str(frac[1]), "unit": frac[0]})
             continue
-        key = (p["product_id"], u)
-        if key in lines:
-            lines[key]["qty"] += q
-            lines[key]["rows"].append(rowno)
-        else:
-            if len(lines) >= MAX_LINES:
-                raise readers.BadFile(f"ไฟล์มีมากกว่า {MAX_LINES} รายการ", code_hint="TOO_MANY_LINES")
-            lines[key] = {"product": {k: p[k] for k in ("product_id", "product_code", "name", "barcode", "conversions")},
-                          "unit_code": u, "qty": q, "rows": [rowno]}
+        for u, q in resolved:
+            key = (p["product_id"], u)
+            if key in lines:
+                lines[key]["qty"] += q
+                if rowno not in lines[key]["rows"]:
+                    lines[key]["rows"].append(rowno)
+            else:
+                if len(lines) >= MAX_LINES:
+                    raise readers.BadFile(f"ไฟล์มีมากกว่า {MAX_LINES} รายการ", code_hint="TOO_MANY_LINES")
+                lines[key] = {"product": {k: p[k] for k in ("product_id", "product_code", "name", "barcode", "conversions")},
+                              "unit_code": u, "qty": q, "rows": [rowno]}
     out = []
     for ln in lines.values():
         q = ln["qty"]
         out.append({**ln, "qty": str(int(q)) if q == q.to_integral_value() else format(q.normalize(), "f")})
     return {
         "sheet": sheet, "header_row": hrow + 1 if hrow >= 0 else None,
-        "columns": {k: readers.make_headers(grid[hrow])[v] if hrow >= 0 else f"COL_{v + 1}" for k, v in cols.items()},
+        "columns": {k: _col_name(grid, hrow, start, v) for k, v in cols.items()},
         "lines": out, "unmatched": unmatched, "errors": errors, "skipped_empty": zero,
         "merged": sum(1 for ln in lines.values() if len(ln["rows"]) > 1),
     }
+
+
+def _col_name(grid: list[list], hrow: int, start: int, c: int) -> str:
+    if hrow < 0:
+        return f"COL_{c + 1}"
+    for r in range(start - 1, hrow - 1, -1):          # the lowest header row that names this column
+        if c < len(grid[r]) and _cell_str(grid[r][c]):
+            return _cell_str(grid[r][c])
+    return f"COL_{c + 1}"
 
 
 def template(conn, with_products: bool) -> bytes:

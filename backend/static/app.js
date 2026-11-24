@@ -655,6 +655,7 @@
         addUnitQty(x.product, ln.q, x.unit_code, x.qty);
       }
       lines = kept.length ? kept : [blank()];
+      const nProducts = new Set(r.lines.map((x) => x.product.product_id)).size;
       lpg.page = 0;
       renderLines();
       const problems = [
@@ -663,14 +664,14 @@
       ].sort((a, b) => a[0] - b[0]);
       fileReport.replaceChildren(h('div', { class: 'banner ' + (problems.length ? 'warn' : 'ok') + ' xlreport' },
         h('b', {}, '📥 ' + f.name + ': '),
-        t('xl.summary', { n: r.lines.length, sheet: r.sheet }),
+        t('xl.summary', { n: nProducts, sheet: r.sheet }),
         r.merged ? ' · ' + t('xl.merged', { n: r.merged }) : '',
         r.skipped_empty ? ' · ' + t('xl.skipped', { n: r.skipped_empty }) : '',
         problems.length ? h('details', { open: problems.length <= 10 },
           h('summary', {}, t('xl.problems', { n: problems.length })),
           h('ul', {}, problems.map(([row, msg]) => h('li', {}, t('xl.row', { row }) + ': ' + msg)))) : null,
         h('button', { type: 'button', class: 'link', onclick: () => fileReport.replaceChildren() }, '✕')));
-      toast(t('xl.done', { n: r.lines.length }), problems.length ? 'err' : undefined);
+      toast(t('xl.done', { n: nProducts }), problems.length ? 'err' : undefined);
     }
     const xlBar = h('div', { class: 'xlbar' },
       h('label', { class: 'btn' }, icon('sheet'), t('xl.import'), h('input', { type: 'file', accept: '.xlsx,.xls,.csv,.htm,.html', class: 'vh', onchange: importLines })),

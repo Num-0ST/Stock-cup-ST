@@ -68,7 +68,9 @@ def test_unit_columns_and_names(client, shop):
                  ["แก้ว 16 ออนซ์", 2, 1, 3],          # matched by exact name; 48+6+3
                  ["ฝาโดม", 1, None, 5]])
     d = parse(client, data).json()
-    assert [(x["product"]["product_code"], x["unit_code"], x["qty"]) for x in d["lines"]] == [("P00061", "PC", "57"), ("P00099", "PC", "1005")]
+    # each unit column keeps its unit (2 CT + 1 PK + 3 PC = 57 PC in total)
+    assert [(x["product"]["product_code"], x["unit_code"], x["qty"]) for x in d["lines"]] == \
+        [("P00061", "CT", "2"), ("P00061", "PK", "1"), ("P00061", "PC", "3"), ("P00099", "CT", "1"), ("P00099", "PC", "5")]
     assert d["errors"] == []
 
 
@@ -101,3 +103,27 @@ def test_template(client, shop):
     buf = io.BytesIO(); ws.parent.save(buf)
     d = parse(client, buf.getvalue()).json()
     assert [(x["product"]["product_code"], x["qty"]) for x in d["lines"]] == [("P00061", "5")] and d["skipped_empty"] == 2
+
+
+def test_two_row_header_with_merged_stock_title(client, shop):
+    """Monthly stock summary export: title rows, then "Code | Product | Stock" with CT / PK / PC under the merged
+    "Stock" cell. Quantities must land in the unit of their column, not all in PC."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["ສະຫຼຸບເຊັກສາງ ປະຈຳເດືອນ 10 / 2026"])
+    ws.append([None, "Warehouse : HHX/G01/ສາງໃຫຍ່ Product: All"])
+    ws.append(["ລະຫັດST", "ລາຍການສິນຄ້າ", "ສະຕັອກ", None, None])
+    ws.append([None, None, "CT", "PK", "PC"])
+    ws.merge_cells("A3:A4"); ws.merge_cells("B3:B4"); ws.merge_cells("C3:E3")
+    ws.append(["P00061", "ແກ້ວ 16 oz:", 49, None, None])
+    ws.append(["P00099", "ຝາໂດມ:", 2, None, 300])
+    ws.append([None, None, None, None, None])
+    ws.append(["P00120", "ຫຼອດ:", None, None, 42])
+    ws.append(["P00061", "ແກ້ວ 16 oz:", None, None, None])
+    buf = io.BytesIO(); wb.save(buf)
+    d = parse(client, buf.getvalue()).json()
+    assert d["header_row"] == 3 and d["columns"].get("q_CT") == "CT" and "qty" not in d["columns"]
+    assert [(x["product"]["product_code"], x["unit_code"], x["qty"]) for x in d["lines"]] == \
+        [("P00061", "CT", "49"), ("P00099", "CT", "2"), ("P00099", "PC", "300"), ("P00120", "PC", "42")]
+    assert d["errors"] == [] and d["unmatched"] == []
