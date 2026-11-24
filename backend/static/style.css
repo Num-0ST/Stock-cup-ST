@@ -435,7 +435,8 @@ b.after { font-variant-numeric: tabular-nums; }
 /* multi-select product picker */
 .pick-btn { font-weight: 600; color: var(--brand); border-color: #b2c7f5; background: var(--brand-soft); }
 .pick-btn:hover { background: #e0eaff; }
-dialog.picker { width: min(920px, 96vw); max-height: 92vh; padding: 0; display: flex; flex-direction: column; }
+dialog.picker { width: min(920px, 96vw); max-height: 92vh; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+dialog.picker > * { flex: 0 0 auto; }          /* header, filters, chips, pager and footer keep their height */
 dialog.picker:not([open]) { display: none; }
 .pk-head { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem .5rem; }
 .pk-head h3 { margin: 0; display: flex; align-items: center; gap: .5rem; }
@@ -446,11 +447,13 @@ dialog.picker:not([open]) { display: none; }
 .pk-search { flex: 1 1 260px; position: relative; }
 .pk-search svg.i { position: absolute; left: .75rem; top: 50%; transform: translateY(-50%); color: #667085; pointer-events: none; }
 .pk-search input { padding-left: 2.3rem; min-height: 42px; }
-.pk-chips { display: flex; gap: .4rem; padding: 0 1.25rem .6rem; overflow-x: auto; scrollbar-width: thin; }
+.pk-chips { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0 1.25rem .75rem; max-height: 6.6rem; overflow-y: auto; }
 .pk-chip { min-height: 34px; padding: .25rem .8rem; border-radius: 999px; font-size: .86rem; white-space: nowrap; box-shadow: none; }
 .pk-chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
-.pk-list { flex: 1; min-height: 180px; overflow: auto; padding: 0 1.25rem; }
+dialog.picker > .pk-list { flex: 1 1 auto; min-height: 160px; overflow: auto; margin: 0 1.25rem; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); }
+.pk-list .tablewrap { border: 0; border-radius: 0; overflow: visible; }
 .pk-list .tablewrap { box-shadow: none; }
+.pk-list .empty { border: 0; }
 .pk-list th { top: 0; }
 .pk-cb { width: 44px; text-align: center; }
 .pk-cb input { width: 20px; height: 20px; }
@@ -470,3 +473,29 @@ dialog.picker .pager { padding: .5rem 1.25rem 0; }
   .pk-foot > button { flex: 1 1 auto; }
 }
 dialog button.link { color: var(--brand); }
+.pk-qty { padding-top: .35rem; padding-bottom: .35rem; }
+.pk-qbox { display: flex; gap: .35rem; }
+.pk-q { display: flex; flex-direction: column; align-items: center; gap: 1px; font-size: .72rem; color: var(--muted); line-height: 1.1; }
+.pk-q input { width: 4.4rem; min-height: 34px; padding: .25rem .4rem; text-align: right; }
+.pk-list tr.picked .pk-q input { border-color: var(--brand); }
+@media (max-width: 1000px) { .pk-list td:nth-child(4), .pk-list th:nth-child(4) { display: none; } }
+@media (max-width: 640px) { .pk-q input { width: 3.6rem; min-height: 40px; } }
+@media (max-width: 640px) {
+  /* phone: one card per product — name and stock on top, quantity boxes underneath */
+  .pk-chips { flex-wrap: nowrap; overflow-x: auto; max-height: none; padding-bottom: .6rem; }
+  .pk-list table, .pk-list tbody, .pk-list thead { display: block; }
+  .pk-list thead tr { display: flex; align-items: center; }
+  .pk-list thead th { display: none; }
+  .pk-list thead th:first-child { display: block; width: auto; }
+  .pk-list tbody tr { display: grid; grid-template-columns: 40px 1fr auto; grid-template-areas: "cb code stock" "cb name name" "cb qty qty";
+    column-gap: .4rem; padding: .55rem .6rem; border-bottom: 1px solid var(--line); }
+  .pk-list tbody td { display: block; padding: 0; border: 0; white-space: normal; background: none !important; }
+  .pk-list tbody tr.picked { background: var(--brand-soft); }
+  .pk-list tbody td:nth-child(1) { grid-area: cb; align-self: center; }
+  .pk-list tbody td:nth-child(2) { grid-area: code; font-weight: 600; }
+  .pk-list tbody td:nth-child(3) { grid-area: name; }
+  .pk-list tbody td:nth-child(4) { display: none; }
+  .pk-list tbody td:nth-child(5) { grid-area: stock; }
+  .pk-list tbody td:nth-child(6) { grid-area: qty; padding-top: .4rem; }
+  .pk-q input { width: 4.4rem; }
+}

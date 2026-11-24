@@ -1063,3 +1063,6 @@ Object.assign(I18N.lo, {
   'pk.inStock': 'ສະເພາະທີ່ມີສະຕັອກໃນສາງນີ້', 'pk.chosen': 'ເລືອກແລ້ວ {n} ລາຍການ', 'pk.add': 'ເພີ່ມ {n} ລາຍການ', 'pk.clear': 'ລ້າງທີ່ເລືອກ',
   'pk.already': 'ຢູ່ໃນເອກະສານແລ້ວ', 'pk.selectPage': 'ເລືອກທັງໜ້ານີ້', 'pk.added': 'ເພີ່ມ {n} ລາຍການແລ້ວ ປ້ອນຈຳນວນໄດ້ເລີຍ',
 });
+Object.assign(I18N.th, { 'pk.qty': 'จำนวน (ใส่เลยก็ได้)', 'pk.added': 'เพิ่ม {n} รายการแล้ว' });
+Object.assign(I18N.en, { 'pk.qty': 'Quantity (optional)', 'pk.added': '{n} items added' });
+Object.assign(I18N.lo, { 'pk.qty': 'ຈຳນວນ (ປ້ອນເລີຍກໍໄດ້)', 'pk.added': 'ເພີ່ມ {n} ລາຍການແລ້ວ' });

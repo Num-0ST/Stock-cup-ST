@@ -163,39 +163,55 @@
     const count = h('b', { class: 'pk-count' });
     const addBtn = h('button', { type: 'button', class: 'primary', onclick: () => {
       if (!chosen.size) return;
-      const picked = [...chosen.values()];
+      const picked = [...chosen.values()];   // [{ product, q: [unit1, unit2, PC] }]
       close();                     // first, so the dialog hands focus back before the form moves it to the new line
       opts.onAdd(picked);
     } });
     const pg = makePager(() => load(true));
     const allBox = h('input', { type: 'checkbox', 'aria-label': t('pk.selectPage'), onchange: (e) => {
-      shown.filter((p) => !opts.have.has(p.product_id)).forEach((p) => { if (e.target.checked) chosen.set(p.product_id, p); else chosen.delete(p.product_id); });
+      shown.filter((p) => !opts.have.has(p.product_id)).forEach((p) => { if (e.target.checked) pick(p); else chosen.delete(p.product_id); });
       draw();
     } });
     let shown = [];
+    const pick = (p) => { if (!chosen.has(p.product_id)) chosen.set(p.product_id, { product: p, q: emptyQ() }); };
     const refreshCount = () => {
       count.textContent = t('pk.chosen', { n: fmtNum(chosen.size) });
       addBtn.replaceChildren(icon('plus'), t('pk.add', { n: fmtNum(chosen.size) }));
       addBtn.disabled = !chosen.size;
     };
-    function draw() {
+    function syncAll() {
       const pickable = shown.filter((p) => !opts.have.has(p.product_id));
       allBox.checked = pickable.length > 0 && pickable.every((p) => chosen.has(p.product_id));
       allBox.indeterminate = !allBox.checked && pickable.some((p) => chosen.has(p.product_id));
       allBox.disabled = !pickable.length;
+    }
+    function draw() {
+      syncAll();
       body.replaceChildren(...shown.map((p) => {
         const already = opts.have.has(p.product_id);
         const on = chosen.has(p.product_id);
         const cb = h('input', { type: 'checkbox', checked: on || already, disabled: already, 'aria-label': p.product_code + ' ' + p.name,
-          onchange: (e) => { if (e.target.checked) chosen.set(p.product_id, p); else chosen.delete(p.product_id); draw(); } });
-        const have = opts.avail ? opts.avail[p.product_id] : null;
+          onchange: (e) => { if (e.target.checked) pick(p); else chosen.delete(p.product_id); draw(); } });
+        const have = opts.avail ? (opts.avail[p.product_id] || 0) : null;
+        // quantity boxes, one per unit of this product (largest first); typing a number ticks the row
+        const q = on ? chosen.get(p.product_id).q : emptyQ();
+        const qtyCell = h('td', { class: 'pk-qty' }, already ? null : h('div', { class: 'pk-qbox' }, unitSlots(p).map((sl, i) => (sl ? h('label', { class: 'pk-q' },
+          h('input', { type: 'number', min: '0', step: 'any', inputmode: 'decimal', value: q[i], placeholder: '0',
+            'aria-label': p.product_code + ' ' + unitName(sl.code),
+            oninput: (e) => {
+              pick(p); chosen.get(p.product_id).q[i] = e.target.value;
+              const tr = e.target.closest('tr'); tr.classList.add('picked'); tr.querySelector('.pk-cb input').checked = true;
+              refreshCount(); syncAll();
+            },
+            onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); const all = [...body.querySelectorAll('.pk-q input')]; const n = all[all.indexOf(e.target) + 1]; if (n) n.focus(); } } }),
+          h('span', {}, unitName(sl.code))) : null))));
         return h('tr', { class: 'click' + (on ? ' picked' : '') + (already ? ' already' : ''), onclick: (e) => {
-          if (already || e.target === cb) return;
-          if (chosen.has(p.product_id)) chosen.delete(p.product_id); else chosen.set(p.product_id, p);
+          if (already || e.target === cb || e.target.closest('.pk-qty')) return;
+          if (chosen.has(p.product_id)) chosen.delete(p.product_id); else pick(p);
           draw();
         } },
           h('td', { class: 'pk-cb' }, cb), td(p.product_code), h('td', {}, p.name, already ? h('span', { class: 'badge pk-in' }, t('pk.already')) : null),
-          td(p.category_name || ''), td(have == null ? '' : availBadges(p, have), true));
+          td(p.category_name || ''), td(have == null ? '' : availBadges(p, have), true), qtyCell);
       }));
       refreshCount();
     }
@@ -206,7 +222,7 @@
         shown = rows;
         box.replaceChildren(rows.length ? h('div', { class: 'tablewrap' }, h('table', {},
           h('thead', {}, h('tr', {}, h('th', { class: 'pk-cb' }, allBox), h('th', {}, t('lbl.code')), h('th', {}, t('lbl.product')),
-            h('th', {}, t('lbl.category')), h('th', { class: 'num' }, t('uq.available')))), body))
+            h('th', {}, t('lbl.category')), h('th', { class: 'num' }, t('uq.available')), h('th', {}, t('pk.qty')))), body))
           : h('div', { class: 'empty' }, icon('inbox'), h('span', {}, t('lbl.noData'))));
         draw();
       } catch (e) { fail(e); }
@@ -249,10 +265,11 @@
   /** Put picked products on a line form: fill empty rows first, skip ones already there. Returns the index of the first one. */
   function addPickedLines(lines, picked, blank) {
     let first = -1;
-    for (const p of picked) {
+    for (const { product: p, q } of picked) {
       if (lines.some((l) => l.product && l.product.product_id === p.product_id)) continue;
+      const fill = { product: p, q: q.map((x) => (numOr0(x) > 0 ? String(x) : '')) };
       let i = lines.findIndex((l) => !l.product && !l.q.some((x) => numOr0(x)));
-      if (i >= 0) Object.assign(lines[i], blank(), { product: p }); else { lines.push({ ...blank(), product: p }); i = lines.length - 1; }
+      if (i >= 0) Object.assign(lines[i], blank(), fill); else { lines.push({ ...blank(), ...fill }); i = lines.length - 1; }
       if (first < 0) first = i;
     }
     return first;
