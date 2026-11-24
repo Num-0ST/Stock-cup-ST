@@ -29,3 +29,24 @@ def test_create_rename_disable_and_duplicates(client, w):
     viewer = make_user(client, "VIEWER", [{"warehouse_id": wh}], "viewer")
     assert viewer.post("/api/categories", json={"name": "ห้าม"}).status_code == 403
     assert viewer.put(f"/api/categories/{cid}", json={"name": "ห้าม"}).status_code == 403
+
+
+def test_product_list_filters_by_category_and_stock(client, w):
+    wa, wb = w.warehouse("F1", "A"), w.warehouse("F2", "B")
+    drinks = client.post("/api/categories", json={"name": "Drinks"}).json()["category_id"]
+    p1, p2, p3 = w.product("D1", "Cola"), w.product("D2", "Soda"), w.product("X1", "Cup")
+    for p in (p1, p2):
+        prod = client.get("/api/products", params={"q": "D"}).json()
+        cur = next(x for x in prod if x["product_id"] == p)
+        client.put(f"/api/products/{p}", json={"product_code": cur["product_code"], "name": cur["name"], "category_id": drinks,
+                                               "reorder_level": 0, "is_active": True,
+                                               "conversions": [{"unit_code": c["unit_code"], "factor_to_base": c["factor_to_base"]} for c in cur["conversions"]]})
+    w.receive(wa, p1, 5)
+    w.receive(wb, p3, 5)
+    codes = lambda **k: [x["product_code"] for x in client.get("/api/products", params=k).json()]
+    assert codes(category_id=drinks) == ["D1", "D2"]
+    assert "X1" in codes(category_id=0) and "D1" not in codes(category_id=0)
+    assert codes(category_id=drinks, in_stock_warehouse_id=wa) == ["D1"]
+    assert codes(in_stock_warehouse_id=wb) == ["X1"]
+    viewer = make_user(client, "VIEWER", [{"warehouse_id": wa}], "viewer2")
+    assert viewer.get("/api/products", params={"in_stock_warehouse_id": wb}).status_code == 403

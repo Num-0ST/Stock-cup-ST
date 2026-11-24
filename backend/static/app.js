@@ -150,6 +150,117 @@
     return v;
   }
 
+  /** Pick many products at once: search, filter by category / in-stock, tick, add.
+      opts: { warehouseId, inStock (default filter), have: Set(product_id already on the form), avail: {id: PC}, onAdd(products) } */
+  function productPicker(opts) {
+    const chosen = new Map();
+    const f = { q: '', cat: '', inStock: !!opts.inStock };
+    const dlg = h('dialog', { class: 'picker' + (S.categories.some((c) => c.is_active) ? ' has-chips' : ''), 'aria-labelledby': 'pk-title' });
+    const close = () => { dlg.close(); dlg.remove(); };
+    dlg.addEventListener('close', () => dlg.remove());
+    const body = h('tbody');
+    const box = h('div', { class: 'pk-list' });
+    const count = h('b', { class: 'pk-count' });
+    const addBtn = h('button', { type: 'button', class: 'primary', onclick: () => {
+      if (!chosen.size) return;
+      const picked = [...chosen.values()];
+      close();                     // first, so the dialog hands focus back before the form moves it to the new line
+      opts.onAdd(picked);
+    } });
+    const pg = makePager(() => load(true));
+    const allBox = h('input', { type: 'checkbox', 'aria-label': t('pk.selectPage'), onchange: (e) => {
+      shown.filter((p) => !opts.have.has(p.product_id)).forEach((p) => { if (e.target.checked) chosen.set(p.product_id, p); else chosen.delete(p.product_id); });
+      draw();
+    } });
+    let shown = [];
+    const refreshCount = () => {
+      count.textContent = t('pk.chosen', { n: fmtNum(chosen.size) });
+      addBtn.replaceChildren(icon('plus'), t('pk.add', { n: fmtNum(chosen.size) }));
+      addBtn.disabled = !chosen.size;
+    };
+    function draw() {
+      const pickable = shown.filter((p) => !opts.have.has(p.product_id));
+      allBox.checked = pickable.length > 0 && pickable.every((p) => chosen.has(p.product_id));
+      allBox.indeterminate = !allBox.checked && pickable.some((p) => chosen.has(p.product_id));
+      allBox.disabled = !pickable.length;
+      body.replaceChildren(...shown.map((p) => {
+        const already = opts.have.has(p.product_id);
+        const on = chosen.has(p.product_id);
+        const cb = h('input', { type: 'checkbox', checked: on || already, disabled: already, 'aria-label': p.product_code + ' ' + p.name,
+          onchange: (e) => { if (e.target.checked) chosen.set(p.product_id, p); else chosen.delete(p.product_id); draw(); } });
+        const have = opts.avail ? opts.avail[p.product_id] : null;
+        return h('tr', { class: 'click' + (on ? ' picked' : '') + (already ? ' already' : ''), onclick: (e) => {
+          if (already || e.target === cb) return;
+          if (chosen.has(p.product_id)) chosen.delete(p.product_id); else chosen.set(p.product_id, p);
+          draw();
+        } },
+          h('td', { class: 'pk-cb' }, cb), td(p.product_code), h('td', {}, p.name, already ? h('span', { class: 'badge pk-in' }, t('pk.already')) : null),
+          td(p.category_name || ''), td(have == null ? '' : availBadges(p, have), true));
+      }));
+      refreshCount();
+    }
+    async function load(keep) {
+      if (!keep) pg.page = 0;
+      try {
+        const rows = pg.take(await api('/products' + qs({ q: f.q, category_id: f.cat, in_stock_warehouse_id: f.inStock ? opts.warehouseId : '', ...pg.q() })));
+        shown = rows;
+        box.replaceChildren(rows.length ? h('div', { class: 'tablewrap' }, h('table', {},
+          h('thead', {}, h('tr', {}, h('th', { class: 'pk-cb' }, allBox), h('th', {}, t('lbl.code')), h('th', {}, t('lbl.product')),
+            h('th', {}, t('lbl.category')), h('th', { class: 'num' }, t('uq.available')))), body))
+          : h('div', { class: 'empty' }, icon('inbox'), h('span', {}, t('lbl.noData'))));
+        draw();
+      } catch (e) { fail(e); }
+    }
+    const cats = S.categories.filter((c) => c.is_active);
+    const search = h('input', { type: 'search', placeholder: t('pk.searchPh'), 'aria-label': t('pk.searchPh'),
+      oninput: debounce((e) => { f.q = e.target.value.trim(); load(); }, 250),
+      onkeydown: (e) => { if (e.key === 'Enter') e.preventDefault(); } });
+    dlg.append(
+      h('div', { class: 'pk-head' }, h('h3', { id: 'pk-title' }, icon('list'), t('pk.title')),
+        h('button', { type: 'button', class: 'link pk-x', 'aria-label': t('btn.cancel'), onclick: close }, '✕')),
+      h('div', { class: 'pk-tools' },
+        h('div', { class: 'pk-search' }, icon('search'), search),
+        field(t('lbl.category'), select([['', t('lbl.all')], ...cats.map((c) => [c.category_id, c.name]), ['0', t('pk.noCategory')]], '',
+          { onchange: (e) => { f.cat = e.target.value; load(); } })),
+        opts.warehouseId ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.inStock, onchange: (e) => { f.inStock = e.target.checked; load(); } }), t('pk.inStock')) : null),
+      cats.length ? h('div', { class: 'pk-chips', role: 'group', 'aria-label': t('lbl.category') },
+        [['', t('lbl.all')], ...cats.map((c) => [String(c.category_id), c.name])].map(([v, l]) => h('button', { type: 'button', class: 'pk-chip' + (v === f.cat ? ' on' : ''),
+          'aria-pressed': String(v === f.cat), onclick: (e) => {
+            f.cat = v; dlg.querySelector('.pk-tools select').value = v;
+            dlg.querySelectorAll('.pk-chip').forEach((x) => { const on = x === e.currentTarget; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on)); });
+            load();
+          } }, l))) : null,
+      box, pg.el,
+      h('div', { class: 'pk-foot' }, count,
+        h('button', { type: 'button', class: 'link', onclick: () => { chosen.clear(); draw(); } }, t('pk.clear')),
+        h('span', { class: 'spacer' }), h('button', { type: 'button', onclick: close }, t('btn.cancel')), addBtn));
+    // keep the chip row in step when the drop-down is used
+    dlg.querySelector('.pk-tools select').addEventListener('change', (e) => dlg.querySelectorAll('.pk-chip').forEach((x, i) => {
+      const v = i === 0 ? '' : String(cats[i - 1] && cats[i - 1].category_id);
+      const on = v === e.target.value; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on));
+    }));
+    document.body.append(dlg);
+    dlg.showModal();
+    search.focus();
+    refreshCount();
+    load();
+  }
+
+  /** Put picked products on a line form: fill empty rows first, skip ones already there. Returns the index of the first one. */
+  function addPickedLines(lines, picked, blank) {
+    let first = -1;
+    for (const p of picked) {
+      if (lines.some((l) => l.product && l.product.product_id === p.product_id)) continue;
+      let i = lines.findIndex((l) => !l.product && !l.q.some((x) => numOr0(x)));
+      if (i >= 0) Object.assign(lines[i], blank(), { product: p }); else { lines.push({ ...blank(), product: p }); i = lines.length - 1; }
+      if (first < 0) first = i;
+    }
+    return first;
+  }
+  function pickerButton(getOpts) {
+    return h('button', { type: 'button', class: 'pick-btn', onclick: () => productPicker(getOpts()) }, icon('check-list'), t('pk.open'));
+  }
+
   // ---------------------------------------------------------------- paging
   const PAGE_SIZES = [25, 50, 100, 200];
   const pageSize = () => { const n = Number(navStore.get('wms_page_size', '50')); return PAGE_SIZES.includes(n) ? n : 50; };
@@ -777,7 +888,19 @@
         isAdj ? field(t('adj.reason') + ' *', reasonSel) : null,
         field(t('lbl.remark'), h('input', { type: 'text', value: state.remark, oninput: (e) => { state.remark = e.target.value; } }), 'wide')),
       xlBar, fileReport,
-      h('div', { class: 'scanbar' }, scanInput, barcodeCameraButton(addByCode)),
+      h('div', { class: 'scanbar' }, pickerButton(() => ({
+        warehouseId: state.warehouse_id, inStock: isOut, avail,
+        have: new Set(lines.filter((l) => l.product).map((l) => l.product.product_id)),
+        onAdd: (picked) => {
+          const first = addPickedLines(lines, picked, blank);
+          if (first < 0) return;
+          lpg.showIndex(first); renderLines();
+          toast(t('pk.added', { n: picked.length }));
+          const row = body.querySelectorAll('tr')[first - lpg.start()];
+          const inp = row && row.querySelector('input.uq:not([disabled])');
+          if (inp) inp.focus();
+        },
+      })), scanInput, barcodeCameraButton(addByCode)),
       h('div', { class: 'card lines-card' },
         h('div', { class: 'lines-head' }, h('b', {}, icon('list'), t('uq.items')), lineCount, totalBox),
         h('div', { class: 'tablewrap' },
@@ -1518,6 +1641,19 @@
         h('div', { class: 'tablewrap' }, h('table', { class: 'lines' }, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, t('lbl.product')), unitHeaders(),
           h('th', { class: 'num' }, t('uq.total')), h('th', {}, t('uq.availableFrom')), h('th', {}, t('lbl.status')), h('th', {}))), body), lpg.el)),
       h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { lines.push(blank()); lpg.showIndex(lines.length - 1); renderLines(); const ins = body.querySelectorAll('input.psearch'); if (ins.length) ins[ins.length - 1].focus(); } }, icon('plus'), t('btn.addLine')),
+        pickerButton(() => ({
+          warehouseId: st.from, inStock: true, avail,
+          have: new Set(lines.filter((l) => l.product).map((l) => l.product.product_id)),
+          onAdd: (picked) => {
+            const first = addPickedLines(lines, picked, blank);
+            if (first < 0) return;
+            lpg.showIndex(first); renderLines();
+            toast(t('pk.added', { n: picked.length }));
+            const row = body.querySelectorAll('tr')[first - lpg.start()];
+            const inp = row && row.querySelector('input.uq:not([disabled])');
+            if (inp) inp.focus();
+          },
+        })),
         h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: submit }, t('btn.save'))));
   }
 

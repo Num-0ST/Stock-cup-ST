@@ -504,17 +504,25 @@ JOIN units bu ON bu.unit_id = p.base_unit_id
 
 @app.get("/api/products")
 def list_products(q: Optional[str] = None, active_only: bool = True, limit: int = 100, offset: int = 0,
+                  category_id: Optional[int] = None, in_stock_warehouse_id: Optional[int] = None,
                   u=Depends(current_user), conn=Depends(get_conn)):
+    """category_id=0 means "no category"; in_stock_warehouse_id keeps only products with stock in that warehouse."""
     limit, offset = clean_page(limit, offset)
     like = f"%{q.strip().lower()}%" if q and q.strip() else None
+    if in_stock_warehouse_id is not None:
+        require_wh(u, in_stock_warehouse_id, "can_view")
     return conn.execute(
         PRODUCT_SELECT + """
         WHERE (%(like)s::text IS NULL OR lower(p.product_code) LIKE %(like)s OR lower(p.name) LIKE %(like)s
                OR p.barcode = %(exact)s
                OR EXISTS (SELECT 1 FROM product_unit_conversions pc WHERE pc.product_id = p.product_id AND pc.barcode = %(exact)s))
           AND (NOT %(active)s OR p.is_active)
+          AND (%(cat)s::int IS NULL OR (%(cat)s = 0 AND p.category_id IS NULL) OR p.category_id = %(cat)s)
+          AND (%(stock_wh)s::int IS NULL OR EXISTS (SELECT 1 FROM stock_balances b WHERE b.product_id = p.product_id
+                                                     AND b.warehouse_id = %(stock_wh)s AND b.qty_on_hand > 0))
         ORDER BY p.product_code LIMIT %(limit)s OFFSET %(offset)s""",
-        {"like": like, "exact": q.strip() if q else None, "active": active_only, "limit": limit, "offset": offset},
+        {"like": like, "exact": q.strip() if q else None, "active": active_only, "limit": limit, "offset": offset,
+         "cat": category_id, "stock_wh": in_stock_warehouse_id},
     ).fetchall()
 
 

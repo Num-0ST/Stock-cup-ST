@@ -1047,3 +1047,19 @@ Object.assign(I18N.lo, {
   'adj.r.RECOUNT': 'ແກ້ຍອດທີ່ບັນທຶກຜິດ', 'adj.r.SAMPLE': 'ໃຊ້ເປັນຕົວຢ່າງ / ແຈກ', 'adj.r.OTHER': 'ອື່ນໆ (ລະບຸໃນໝາຍເຫດ)',
   'err.ADJUST_REASON_REQUIRED': 'ກະລຸນາເລືອກເຫດຜົນການປັບສະຕັອກ', 'err.ADJUST_DIRECTION_REQUIRED': 'ກະລຸນາເລືອກວ່າຈະປັບເພີ່ມ ຫຼື ປັບຫຼຸດ',
 });
+// multi-select product picker
+Object.assign(I18N.th, {
+  'pk.open': 'เลือกสินค้า', 'pk.title': 'เลือกสินค้า', 'pk.searchPh': 'ค้นหารหัส ชื่อ หรือบาร์โค้ด', 'pk.noCategory': 'ไม่มีหมวด',
+  'pk.inStock': 'เฉพาะที่มีสต็อกในคลังนี้', 'pk.chosen': 'เลือกแล้ว {n} รายการ', 'pk.add': 'เพิ่ม {n} รายการ', 'pk.clear': 'ล้างที่เลือก',
+  'pk.already': 'อยู่ในเอกสารแล้ว', 'pk.selectPage': 'เลือกทั้งหน้านี้', 'pk.added': 'เพิ่ม {n} รายการแล้ว ใส่จำนวนได้เลย',
+});
+Object.assign(I18N.en, {
+  'pk.open': 'Pick products', 'pk.title': 'Pick products', 'pk.searchPh': 'Search code, name or barcode', 'pk.noCategory': 'No category',
+  'pk.inStock': 'Only items in stock here', 'pk.chosen': '{n} selected', 'pk.add': 'Add {n} items', 'pk.clear': 'Clear selection',
+  'pk.already': 'Already on the form', 'pk.selectPage': 'Select this page', 'pk.added': '{n} items added — enter the quantities',
+});
+Object.assign(I18N.lo, {
+  'pk.open': 'ເລືອກສິນຄ້າ', 'pk.title': 'ເລືອກສິນຄ້າ', 'pk.searchPh': 'ຄົ້ນຫາລະຫັດ ຊື່ ຫຼື ບາໂຄດ', 'pk.noCategory': 'ບໍ່ມີໝວດ',
+  'pk.inStock': 'ສະເພາະທີ່ມີສະຕັອກໃນສາງນີ້', 'pk.chosen': 'ເລືອກແລ້ວ {n} ລາຍການ', 'pk.add': 'ເພີ່ມ {n} ລາຍການ', 'pk.clear': 'ລ້າງທີ່ເລືອກ',
+  'pk.already': 'ຢູ່ໃນເອກະສານແລ້ວ', 'pk.selectPage': 'ເລືອກທັງໜ້ານີ້', 'pk.added': 'ເພີ່ມ {n} ລາຍການແລ້ວ ປ້ອນຈຳນວນໄດ້ເລີຍ',
+});
