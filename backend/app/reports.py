@@ -60,7 +60,7 @@ L = {
         "received": "ຮັບແລ້ວ", "returned_src": "ສົ່ງຄືນຕົ້ນທາງ", "outstanding": "ຄ້າງຮັບ", "time": "ເວລາ",
         "action": "ການກະທຳ", "entity": "ຂໍ້ມູນ", "ip": "IP", "detail": "ລາຍລະອຽດ",
         "OK": "ປົກກະຕິ", "LOW": "ໃກ້ໝົດ", "OUT": "ໝົດ", "FAST": "ຂາຍໄວ", "NORMAL": "ປານກາງ", "SLOW": "ຂາຍຊ້າ", "DEAD": "ບໍ່ມີຍອດຂາຍ",
-        "deposits": "ເຄື່ອງຝາກລູກຄ້າ (ຝາກສາງ)", "deposit_qty": "ຝາກ (PC)", "held": "ເຄື່ອງຝາກລູກຄ້າ (PC)", "physical": "ຂອງໃນສາງຕົວຈິງ (PC)", "customer": "ລູກຄ້າ", "deposit_no": "ເລກທີໃບຝາກ", "due": "ກຳນົດສົ່ງ", "sale_no": "ບິນຂາຍ", "delivered": "ສົ່ງແລ້ວ", "remaining": "ຄົງຄ້າງ", "OPEN": "ລໍຖ້າສົ່ງ", "PARTIAL": "ສົ່ງບາງສ່ວນ", "COMPLETED": "ສົ່ງຄົບ", "CANCELLED": "ຍົກເລີກ",
+        "deposits": "ເຄື່ອງຝາກລູກຄ້າ (ຝາກສາງ)", "deposit_qty": "ຝາກ (PC)", "held": "ເຄື່ອງຝາກລູກຄ້າ (PC)", "physical": "ໃນສາງຕົວຈິງ (PC)", "customer": "ລູກຄ້າ", "deposit_no": "ເລກທີໃບຝາກ", "due": "ກຳນົດສົ່ງ", "sale_no": "ບິນຂາຍ", "delivered": "ສົ່ງແລ້ວ", "remaining": "ຄົງຄ້າງ", "OPEN": "ລໍຖ້າສົ່ງ", "PARTIAL": "ສົ່ງບາງສ່ວນ", "COMPLETED": "ສົ່ງຄົບ", "CANCELLED": "ຍົກເລີກ",
         "generated": "ສ້າງເມື່ອ", "page": "ໜ້າ", "filters": "ເງື່ອນໄຂ", "rows": "ແຖວ", "truncated": "(ຕັດທອນ)",
     },
 }
