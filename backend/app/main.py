@@ -219,6 +219,11 @@ class CategoryIn(BaseModel):
     parent_id: Optional[int] = None
 
 
+class CategoryUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    is_active: bool = True
+
+
 class ConversionIn(BaseModel):
     unit_code: str
     factor_to_base: int = Field(gt=0)
@@ -414,14 +419,41 @@ def units(u=Depends(current_user), conn=Depends(get_conn)):
 
 @app.get("/api/categories")
 def categories(u=Depends(current_user), conn=Depends(get_conn)):
-    return conn.execute("SELECT * FROM categories ORDER BY name").fetchall()
+    return conn.execute("""SELECT c.*, (SELECT count(*) FROM products p WHERE p.category_id = c.category_id) AS product_count
+                           FROM categories c ORDER BY c.name""").fetchall()
+
+
+def _category_name(conn, name: str, skip_id: Optional[int] = None) -> str:
+    name = " ".join(name.split())
+    if not name:
+        raise engine.ValidationFailed("กรุณาระบุชื่อหมวด", field="name")
+    if conn.execute("SELECT 1 FROM categories WHERE lower(name)=lower(%s) AND category_id IS DISTINCT FROM %s",
+                    (name, skip_id)).fetchone():
+        raise engine.ValidationFailed(f"มีหมวด {name} อยู่แล้ว", field="name", code_hint="DUPLICATE")
+    return name
 
 
 @app.post("/api/categories", status_code=201)
 def create_category(body: CategoryIn, u=Depends(current_user), conn=Depends(get_conn)):
-    require_role(u, "MANAGER")
-    return conn.execute("INSERT INTO categories (name, parent_id) VALUES (%s,%s) RETURNING *",
-                        (body.name, body.parent_id)).fetchone()
+    require_role(u, "MANAGER", "STOREKEEPER")            # same people who may edit products
+    name = _category_name(conn, body.name)
+    row = conn.execute("INSERT INTO categories (name, parent_id) VALUES (%s,%s) RETURNING *", (name, body.parent_id)).fetchone()
+    audit(conn.cursor(), u["user_id"], "CREATE_CATEGORY", "category", row["category_id"], new={"name": name})
+    return row
+
+
+@app.put("/api/categories/{category_id}")
+def update_category(category_id: int, body: CategoryUpdate, u=Depends(current_user), conn=Depends(get_conn)):
+    require_role(u, "MANAGER", "STOREKEEPER")
+    old = conn.execute("SELECT * FROM categories WHERE category_id=%s", (category_id,)).fetchone()
+    if not old:
+        raise engine.NotFound("ไม่พบหมวดสินค้า")
+    name = _category_name(conn, body.name, category_id)
+    row = conn.execute("UPDATE categories SET name=%s, is_active=%s WHERE category_id=%s RETURNING *",
+                       (name, body.is_active, category_id)).fetchone()
+    audit(conn.cursor(), u["user_id"], "UPDATE_CATEGORY", "category", category_id,
+          old={"name": old["name"], "is_active": old["is_active"]}, new={"name": name, "is_active": body.is_active})
+    return row
 
 
 @app.get("/api/warehouses")

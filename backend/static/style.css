@@ -411,3 +411,11 @@ table.lines.cnt td.uqcell input.uq { width: 7rem; }
   .pg-info { width: 100%; text-align: center; }
   .pg-btn { min-width: 44px; min-height: 44px; }
 }
+
+/* category picker in the product form */
+.catpick { display: flex; gap: .5rem; align-items: center; }
+.catpick > select { flex: 1; }
+.catnew { display: flex; gap: .5rem; align-items: center; width: 100%; }
+.catnew input { flex: 1; }
+.badge.active { background: var(--ok-bg); color: var(--ok); }
+.badge.inactive { background: #f2f4f7; color: var(--muted); }

@@ -1009,3 +1009,16 @@ Object.assign(I18N.lo, {
   'pg.label': 'ແບ່ງໜ້າ', 'pg.showing': 'ສະແດງ {from}–{to} ຈາກ {total} ລາຍການ', 'pg.showingOpen': 'ສະແດງລາຍການທີ {from}–{to}',
   'pg.page': 'ໜ້າ {n}', 'pg.first': 'ໜ້າທຳອິດ', 'pg.prev': 'ໜ້າກ່ອນ', 'pg.next': 'ໜ້າຖັດໄປ', 'pg.last': 'ໜ້າສຸດທ້າຍ', 'pg.perPage': 'ແຖວຕໍ່ໜ້າ',
 });
+// product categories
+Object.assign(I18N.th, {
+  'nav.categories': 'หมวดสินค้า', 'cat.new': 'หมวดใหม่', 'cat.namePh': 'ชื่อหมวด เช่น เครื่องดื่ม', 'cat.added': 'เพิ่มหมวด "{name}" แล้ว',
+  'cat.products': 'จำนวนสินค้า', 'cat.disable': 'ปิดใช้งาน', 'cat.enable': 'เปิดใช้งาน',
+});
+Object.assign(I18N.en, {
+  'nav.categories': 'Categories', 'cat.new': 'New category', 'cat.namePh': 'Category name, e.g. Drinks', 'cat.added': 'Category "{name}" added',
+  'cat.products': 'Products', 'cat.disable': 'Disable', 'cat.enable': 'Enable',
+});
+Object.assign(I18N.lo, {
+  'nav.categories': 'ໝວດສິນຄ້າ', 'cat.new': 'ໝວດໃໝ່', 'cat.namePh': 'ຊື່ໝວດ ເຊັ່ນ ເຄື່ອງດື່ມ', 'cat.added': 'ເພີ່ມໝວດ "{name}" ແລ້ວ',
+  'cat.products': 'ຈຳນວນສິນຄ້າ', 'cat.disable': 'ປິດໃຊ້ງານ', 'cat.enable': 'ເປີດໃຊ້ງານ',
+});

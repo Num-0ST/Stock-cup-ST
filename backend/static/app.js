@@ -848,6 +848,38 @@
     load();
   }
 
+  /** Category select with an inline "+ new category" box, so a category can be added without leaving the form. */
+  function categoryPicker(v) {
+    const box = h('div', { class: 'catpick' });
+    const draw = (adding) => {
+      const opts = S.categories.filter((c) => c.is_active || String(c.category_id) === String(v.category_id));
+      const sel = select([['', '—'], ...opts.map((c) => [c.category_id, c.name])], v.category_id, { onchange: (e) => { v.category_id = e.target.value; } });
+      if (!adding) {
+        box.replaceChildren(sel, h('button', { type: 'button', class: 'small', onclick: () => draw(true) }, icon('plus'), t('cat.new')));
+        return;
+      }
+      const inp = h('input', { type: 'text', maxlength: 150, placeholder: t('cat.namePh'), 'aria-label': t('cat.namePh'),
+        onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); draw(false); } } });
+      async function save() {
+        const name = inp.value.trim();
+        if (!name) { inp.focus(); return; }
+        try {
+          const c = await api('/categories', { method: 'POST', body: { name } });
+          S.categories = await api('/categories');
+          v.category_id = String(c.category_id);
+          toast(t('cat.added', { name: c.name }));
+          draw(false);
+        } catch (e) { fail(e); }
+      }
+      box.replaceChildren(h('div', { class: 'catnew' }, inp,
+        h('button', { type: 'button', class: 'primary small', onclick: save }, t('btn.save')),
+        h('button', { type: 'button', class: 'small', onclick: () => draw(false) }, t('btn.cancel'))));
+      inp.focus();
+    };
+    draw(false);
+    return box;
+  }
+
   function productForm(p) {
     const convs = ['CT', 'PK'].map((code) => {
       const ex = p && p.conversions.find((c) => c.unit_code === code);
@@ -871,13 +903,13 @@
     field(t('lbl.code'), h('input', { required: true, maxlength: 50, value: v.product_code, oninput: (e) => { v.product_code = e.target.value; } })),
     field(t('lbl.product'), h('input', { required: true, maxlength: 255, value: v.name, oninput: (e) => { v.name = e.target.value; } })),
     field(t('lbl.barcode') + ' (PC)', h('input', { value: v.barcode, oninput: (e) => { v.barcode = e.target.value; } })),
-    field(t('lbl.category'), select([['', '—'], ...S.categories.map((c) => [c.category_id, c.name])], v.category_id, { onchange: (e) => { v.category_id = e.target.value; } })),
+    field(t('lbl.category'), categoryPicker(v)),
     field(t('lbl.reorder') + ' (PC)', h('input', { type: 'number', min: '0', value: v.reorder_level, oninput: (e) => { v.reorder_level = e.target.value; } })),
     h('fieldset', {}, h('legend', {}, t('lbl.conversions') + ' (1 unit = N PC)'),
       convs.map((c) => h('div', { class: 'conv-row' }, h('b', {}, c.code),
         h('input', { type: 'number', min: '1', step: '1', placeholder: 'N PC', value: c.factor, oninput: (e) => { c.factor = e.target.value; } }),
         h('input', { placeholder: t('lbl.barcode'), value: c.barcode, oninput: (e) => { c.barcode = e.target.value; } })))),
-    p ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: v.is_active, onchange: (e) => { v.is_active = e.target.checked; } }), t('lbl.activeOnly')) : null,
+    p ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: v.is_active, onchange: (e) => { v.is_active = e.target.checked; } }), t('status.ACTIVE')) : null,
     h('p', { class: 'hint' }, t('msg.conversionHint')),
     h('div', { class: 'actions' }, h('button', { type: 'button', onclick: close }, t('btn.cancel')), h('button', { class: 'primary', type: 'submit' }, t('btn.save')))));
     document.body.append(dlg);
@@ -886,12 +918,14 @@
 
   // ---------------------------------------------------------------- masters (warehouses / customers / suppliers)
   async function pageMasters(tab = 'warehouses') {
-    const tabs = h('div', { class: 'tabs' }, ['warehouses', 'customers', 'suppliers'].map((x) =>
+    const tabs = h('div', { class: 'tabs' }, ['warehouses', ...(canMaster() ? ['categories'] : []), 'customers', 'suppliers'].map((x) =>
       h('a', { href: '#/masters/' + x, class: x === tab ? 'active' : '' }, t('nav.' + x))));
     const box = h('div');
     view(h('h2', {}, t('nav.masters')), tabs, box);
     try {
-      if (tab === 'warehouses') await mastersWarehouses(box); else await mastersParties(box, tab);
+      if (tab === 'warehouses') await mastersWarehouses(box);
+      else if (tab === 'categories') await mastersCategories(box);
+      else await mastersParties(box, tab);
     } catch (e) { fail(e); }
   }
 
@@ -914,6 +948,32 @@
       field(t('lbl.code'), h('input', { required: true, maxlength: 20, oninput: (e) => { v.warehouse_code = e.target.value; } })),
       field(t('lbl.name'), h('input', { required: true, oninput: (e) => { v.name = e.target.value; } })),
       h('button', { class: 'primary', type: 'submit' }, t('btn.save'))) : null);
+  }
+
+  async function mastersCategories(box) {
+    const rows = await api('/categories');
+    S.categories = rows;
+    const save = async (c, body) => {
+      try { await api('/categories/' + c.category_id, { method: 'PUT', body }); toast(t('msg.saved')); pageMasters('categories'); } catch (e) { fail(e); }
+    };
+    let name = '';
+    box.append(
+      h('form', { class: 'card form', onsubmit: async (e) => {
+        e.preventDefault();
+        try { const c = await api('/categories', { method: 'POST', body: { name } }); toast(t('cat.added', { name: c.name })); pageMasters('categories'); } catch (err) { fail(err); }
+      } },
+      h('h3', {}, t('btn.new') + ' ' + t('nav.categories')),
+      field(t('lbl.name'), h('input', { required: true, maxlength: 150, placeholder: t('cat.namePh'), oninput: (e) => { name = e.target.value; } })),
+      h('button', { class: 'primary', type: 'submit' }, icon('plus'), t('btn.save'))),
+      table([t('lbl.name'), { label: t('cat.products'), num: true }, t('lbl.status'), ''], rows.map((c) => h('tr', {},
+        td(c.name), td(fmtNum(c.product_count), true), td(statusBadge(c.is_active ? 'ACTIVE' : 'INACTIVE')),
+        h('td', { class: 'num' },
+          h('button', { class: 'link', type: 'button', onclick: () => {
+            const n = prompt(t('lbl.name'), c.name);
+            if (n !== null && n.trim()) save(c, { name: n.trim(), is_active: c.is_active });
+          } }, t('btn.edit')), ' · ',
+          h('button', { class: 'link', type: 'button', onclick: () => save(c, { name: c.name, is_active: !c.is_active }) },
+            c.is_active ? t('cat.disable') : t('cat.enable')))))));
   }
 
   async function mastersParties(box, kind) {
