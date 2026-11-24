@@ -289,7 +289,7 @@
         },
       },
       h('div', { class: 'lang-row' }, icon('lang'), langSelect()),
-      h('div', { class: 'login-logo', 'aria-hidden': 'true' }, 'ST'),
+      h('img', { class: 'login-logo', src: '/static/logo-hhx.png?v=1', alt: 'HHX', width: '240', height: '180' }),
       h('h1', { id: 'login-title' }, t('app.title')),
       h('p', { class: 'login-sub' }, t('login.sub')),
       field(t('lbl.username'), u), field(t('lbl.password'), p),

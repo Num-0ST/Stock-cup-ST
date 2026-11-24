@@ -1,7 +1,7 @@
 /* UI translations: th (Thai), en (English), lo (Lao). Missing keys fall back to English. */
 const I18N = {
   th: {
-    'app.title': 'ระบบบริหารคลังสินค้าอัตโนมัติ (หลายคลัง)',
+    'app.title': 'ระบบ WMS-SVK',
     'btn.addLine': 'เพิ่มรายการ', 'btn.applyCount': 'ปรับยอดตามผลนับ', 'btn.cancel': 'ยกเลิก', 'btn.delete': 'ลบ',
     'btn.edit': 'แก้ไข', 'btn.login': 'เข้าสู่ระบบ', 'btn.logout': 'ออกจากระบบ', 'btn.new': 'สร้างใหม่',
     'btn.post': 'ยืนยัน (ตัดสต็อก)', 'btn.reverse': 'กลับรายการ', 'btn.save': 'บันทึก', 'btn.saveDraft': 'บันทึกฉบับร่าง',
@@ -247,7 +247,7 @@ const I18N = {
   },
 
   en: {
-    'app.title': 'Multi-Warehouse Inventory System',
+    'app.title': 'WMS-SVK System',
     'btn.addLine': 'Add line', 'btn.applyCount': 'Apply count', 'btn.cancel': 'Cancel', 'btn.delete': 'Delete',
     'btn.edit': 'Edit', 'btn.login': 'Sign in', 'btn.logout': 'Sign out', 'btn.new': 'New',
     'btn.post': 'Confirm (update stock)', 'btn.reverse': 'Reverse', 'btn.save': 'Save', 'btn.saveDraft': 'Save draft',
@@ -493,7 +493,7 @@ const I18N = {
   },
 
   lo: {
-    'app.title': 'ລະບົບບໍລິຫານສາງສິນຄ້າ (ຫຼາຍສາງ)',
+    'app.title': 'ລະບົບ WMS-SVK',
     'btn.addLine': 'ເພີ່ມລາຍການ', 'btn.applyCount': 'ປັບຍອດຕາມການນັບ', 'btn.cancel': 'ຍົກເລີກ', 'btn.delete': 'ລຶບ',
     'btn.edit': 'ແກ້ໄຂ', 'btn.login': 'ເຂົ້າສູ່ລະບົບ', 'btn.logout': 'ອອກຈາກລະບົບ', 'btn.new': 'ສ້າງໃໝ່',
     'btn.post': 'ຢືນຢັນ (ຕັດສະຕັອກ)', 'btn.reverse': 'ຍ້ອນກັບລາຍການ', 'btn.save': 'ບັນທຶກ', 'btn.saveDraft': 'ບັນທຶກສະບັບຮ່າງ',
