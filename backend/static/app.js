@@ -402,28 +402,34 @@
     ].filter(Boolean).map(([id, label, ic, items]) => [id, label, ic, items.filter(Boolean)]);
     const cur = location.hash.split('/')[1] || 'dashboard';
     const isCur = (href) => (href.split('/').length > 2 ? location.hash === href : href.split('/')[1] === cur);
-    let openSet;
-    try { openSet = new Set(JSON.parse(navStore.get('wms_nav_open', '["daily"]'))); } catch (_) { openSet = new Set(['daily']); }
+    // accordion: only one group is open — the one holding the current page, else the last one opened
+    const activeGroup = groups.find(([, , , items]) => items.some(([href]) => isCur(href)));
+    let openId = activeGroup ? activeGroup[0] : navStore.get('wms_nav_open1', 'daily');
     const layout = h('div', { class: 'layout' + (navStore.get('wms_nav_collapsed', '0') === '1' ? ' collapsed' : '') });
     const closeDrawer = () => layout.classList.remove('open');
     const link = ([href, key, ic], sub) => h('a', { href, title: t(key), class: (sub ? 'sub' : 'item') + (isCur(href) ? ' active' : ''), 'aria-current': isCur(href) ? 'page' : null, onclick: closeDrawer },
       icon(ic), h('span', { class: 'txt' }, t(key)));
     const groupEl = ([id, label, ic, items]) => {
-      const open = openSet.has(id) || items.some(([href]) => isCur(href));
+      const open = openId === id;
       const box = h('div', { class: 'grp' + (open ? ' open' : '') + (items.some(([href]) => isCur(href)) ? ' has-active' : '') });
       box.append(
         h('button', { type: 'button', class: 'grp-head', title: t(label), 'aria-expanded': String(open), onclick: (e) => {
-          const o = box.classList.toggle('open');
+          const o = !box.classList.contains('open');
+          box.parentNode.querySelectorAll('.grp.open').forEach((g) => {        // close the others
+            g.classList.remove('open'); g.querySelector('.grp-head').setAttribute('aria-expanded', 'false');
+          });
+          box.classList.toggle('open', o);
           e.currentTarget.setAttribute('aria-expanded', String(o));
-          if (o) openSet.add(id); else openSet.delete(id);
-          navStore.set('wms_nav_open', JSON.stringify([...openSet]));
+          openId = o ? id : '';
+          navStore.set('wms_nav_open1', openId);
         } }, icon(ic), h('span', { class: 'txt' }, t(label)), icon('chevron', 'chev')),
         h('div', { class: 'grp-items' }, items.map((it) => link(it, true))));
       return box;
     };
     const side = h('aside', { class: 'side' },
       h('div', { class: 'side-brand' },
-        h('a', { class: 'brand', href: '#/dashboard', title: t('app.title') }, h('span', { class: 'logo' }, 'ST'), h('span', { class: 'txt' }, t('app.short')))),
+        h('a', { class: 'brand', href: '#/dashboard', title: t('app.title') }, h('img', { class: 'brand-logo', src: '/static/logo-hhx.png?v=1', alt: 'HHX', width: '55', height: '44' }),
+          h('span', { class: 'txt' }, 'WMS-SVK'))),
       h('div', { class: 'side-user' },
         h('a', { class: 'avatar', href: '#/account', title: t('nav.account'), onclick: closeDrawer }, icon('user')),
         h('div', { class: 'txt' }, h('a', { href: '#/account', onclick: closeDrawer }, S.me.full_name), h('small', {}, '● ' + S.me.role_code))),
@@ -441,7 +447,7 @@
       h('button', { class: 'burger', type: 'button', 'aria-label': t('nav.menu'), 'aria-expanded': 'false', onclick: (e) => {
         e.currentTarget.setAttribute('aria-expanded', String(layout.classList.toggle('open')));
       } }, icon('menu')),
-      h('span', { class: 'brand' }, h('span', { class: 'logo' }, 'ST'), t('app.short')));
+      h('span', { class: 'brand' }, h('img', { class: 'brand-logo', src: '/static/logo-hhx.png?v=1', alt: 'HHX', width: '38', height: '30' }), 'WMS-SVK'));
     const skip = h('button', { class: 'skip', type: 'button', onclick: () => { const m = main(); m.focus(); m.scrollIntoView(); } }, t('nav.skip'));
     layout.addEventListener('keydown', (e) => { if (e.key === 'Escape' && layout.classList.contains('open')) { closeDrawer(); topbar.querySelector('.burger').focus(); } });
     layout.append(skip, side, h('div', { class: 'backdrop', onclick: closeDrawer }),
