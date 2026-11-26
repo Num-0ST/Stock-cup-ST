@@ -506,3 +506,21 @@ dialog button.link { color: var(--brand); }
 .layout.collapsed .side-brand { padding: 0 .35rem; }
 .layout.collapsed .brand-logo { height: 36px; }
 .mtop .brand-logo { height: 30px; background: #fff; border-radius: 8px; padding: 2px 6px; box-sizing: content-box; }
+
+/* documents page: filter card with the create / scan buttons underneath */
+.filtercard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: .9rem 1rem; margin: 0 0 1rem; }
+.filtercard > .filters { background: none; border: 0; box-shadow: none; padding: 0; margin: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: .85rem 1rem; }
+.filtercard > .filters .field { max-width: none; min-width: 0; }
+.inline-input { display: flex; gap: .4rem; }
+.inline-input input { flex: 1; min-width: 0; }
+.inline-input label.btn { flex: 0 0 auto; padding: .45rem .7rem; }
+.df-actions { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin-top: .9rem; padding-top: .9rem; border-top: 1px solid var(--line); }
+@media (min-width: 1180px) { .filtercard > .filters { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .filtercard > .filters { grid-template-columns: 1fr 1fr; }
+  .filtercard > .filters .field:nth-child(4) { grid-column: 1 / -1; }
+  .df-actions > * { flex: 1 1 auto; }
+  .df-actions .menu-btn { width: 100%; }
+}
+.df-actions .menu-list { left: 0; right: auto; }

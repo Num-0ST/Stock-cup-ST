@@ -328,7 +328,8 @@
   function table(headers, rows, opts = {}) {
     if (!rows.length) return h('div', { class: 'empty' }, icon('inbox'), h('span', {}, t('lbl.noData')));
     const body = h('tbody');
-    const wrap = h('div', { class: 'tablewrap' },
+    // focusable so keyboard users can scroll a table that is wider than the screen
+    const wrap = h('div', { class: 'tablewrap', tabindex: '0' },
       h('table', {},
         h('thead', {}, h('tr', {}, headers.map((x) => h('th', { class: x.num ? 'num' : '' }, x.label || x)))),
         body));
@@ -568,18 +569,21 @@
       } catch (e) { fail(e); }
     }
     const newBtns = [];
-    if (canScan()) newBtns.push(h('a', { class: 'btn', href: '#/scan' }, icon('scan'), t('nav.scan')));
     if (myDocTypes().length) newBtns.push(menuButton(h('span', {}, icon('plus'), t('doc.newMenu')), myDocTypes().map((x) => [docTypeLabel(x), '#/new/' + x]), 'primary'));
+    if (canScan()) newBtns.push(h('a', { class: 'btn', href: '#/scan' }, icon('scan'), t('nav.scan')));
     const docNoInput = h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) });
-    view(h('h2', {}, t('nav.docs')), h('div', { class: 'actions' }, newBtns),
-      h('div', { class: 'filters' },
-        field(t('lbl.docType'), select([['', t('lbl.all')], ...DOC_TYPES.map((x) => [x, docTypeLabel(x)])], '', { onchange: (e) => { f.doc_type = e.target.value; load(); } })),
-        field(t('lbl.warehouse'), select(whOptions(S.whs, true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
-        field(t('lbl.status'), select([['', t('lbl.all')], ...['DRAFT', 'POSTED', 'REVERSED'].map((x) => [x, t('status.' + x)])], '', { onchange: (e) => { f.status = e.target.value; load(); } })),
-        field(t('lbl.docNo'), docNoInput),
-        barcodeCameraButton((code) => { docNoInput.value = code; f.q = code; load(); }),
-        field(t('lbl.dateFrom'), h('input', { type: 'date', onchange: (e) => { f.date_from = e.target.value; load(); } })),
-        field(t('lbl.dateTo'), h('input', { type: 'date', onchange: (e) => { f.date_to = e.target.value; load(); } }))),
+    // one card: the filters in a row, the "new document" / "scan bill" buttons underneath
+    view(h('h2', {}, t('nav.docs')),
+      h('div', { class: 'filtercard' },
+        h('div', { class: 'filters' },
+          field(t('lbl.docType'), select([['', t('lbl.all')], ...DOC_TYPES.map((x) => [x, docTypeLabel(x)])], '', { onchange: (e) => { f.doc_type = e.target.value; load(); } })),
+          field(t('lbl.warehouse'), select(whOptions(S.whs, true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
+          field(t('lbl.status'), select([['', t('lbl.all')], ...['DRAFT', 'POSTED', 'REVERSED'].map((x) => [x, t('status.' + x)])], '', { onchange: (e) => { f.status = e.target.value; load(); } })),
+          field(t('lbl.docNo'), h('div', { class: 'inline-input' }, docNoInput,
+            barcodeCameraButton((code) => { docNoInput.value = code; f.q = code; load(); }))),
+          field(t('lbl.dateFrom'), h('input', { type: 'date', onchange: (e) => { f.date_from = e.target.value; load(); } })),
+          field(t('lbl.dateTo'), h('input', { type: 'date', onchange: (e) => { f.date_to = e.target.value; load(); } }))),
+        newBtns.length ? h('div', { class: 'df-actions' }, newBtns) : null),
       box, pg.el);
     load();
   }
