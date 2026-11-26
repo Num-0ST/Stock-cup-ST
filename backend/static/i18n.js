@@ -1066,3 +1066,43 @@ Object.assign(I18N.lo, {
 Object.assign(I18N.th, { 'pk.qty': 'จำนวน (ใส่เลยก็ได้)', 'pk.added': 'เพิ่ม {n} รายการแล้ว' });
 Object.assign(I18N.en, { 'pk.qty': 'Quantity (optional)', 'pk.added': '{n} items added' });
 Object.assign(I18N.lo, { 'pk.qty': 'ຈຳນວນ (ປ້ອນເລີຍກໍໄດ້)', 'pk.added': 'ເພີ່ມ {n} ລາຍການແລ້ວ' });
+// cancel documents (replaces "new customer return")
+Object.assign(I18N.th, {
+  'nav.cancelDoc': 'ยกเลิกเอกสาร', 'btn.reverse': 'ยกเลิกเอกสาร', 'status.REVERSED': 'ยกเลิกแล้ว', 'msg.reversed': 'ยกเลิกเอกสารแล้ว',
+  'lbl.reversesDoc': 'ยกเลิกเอกสาร', 'doc.searchPh': 'ค้นหาเลขที่เอกสาร ชื่อลูกค้า/ผู้จำหน่าย หรือหมายเหตุ',
+  'cx.hint': 'ค้นหาเลขที่เอกสารแล้วกดยกเลิก ระบบจะคืนรายการทั้งหมด: สินค้าที่ขาย เบิก หรือคืนซัพพลายเออร์ออกไปจะกลับเข้าคลัง ส่วนใบรับเข้าจะถูกตัดออกจากคลัง',
+  'cx.managerOnly': 'เฉพาะผู้จัดการหรือผู้ดูแลระบบเท่านั้นที่ยกเลิกเอกสารได้', 'cx.pick': 'เลือก', 'cx.pickTitle': 'เอกสารที่ยกเลิกได้',
+  'cx.other': 'เลือกเอกสารอื่น', 'cx.effect': 'ผลต่อคลัง', 'cx.backIn': 'คืนเข้าคลัง', 'cx.takeOut': 'ตัดออกจากคลัง',
+  'cx.itemsTitle': 'รายการที่จะถูกยกเลิกทั้งหมด', 'cx.reason': 'เหตุผลที่ยกเลิก', 'cx.reasonPh': 'เช่น ลูกค้ายกเลิกบิล, คีย์ผิด',
+  'cx.reasonRequired': 'กรุณาใส่เหตุผลที่ยกเลิก', 'cx.go': 'ยืนยันยกเลิกเอกสาร', 'cx.confirm': 'ยกเลิกเอกสาร {no} ทั้งใบ? ยกเลิกแล้วแก้กลับไม่ได้',
+  'cx.done': 'ยกเลิก {no} แล้ว', 'cx.doneLong': 'ยกเลิกเอกสาร {no} เรียบร้อย สต็อกถูกคืนแล้ว เอกสารยกเลิก:', 'cx.viewDoc': 'ดูเอกสารเดิม',
+  'cx.already': 'เอกสารนี้ถูกยกเลิกไปแล้ว:', 'cx.isReversal': 'นี่คือเอกสารยกเลิก ยกเลิกซ้ำไม่ได้:', 'cx.notPosted': 'ยกเลิกได้เฉพาะเอกสารที่ยืนยันแล้ว ฉบับร่างให้ลบที่หน้าเอกสาร:',
+  'cx.deposits': 'บิลนี้มีใบฝากคลังค้างอยู่ {n} ใบ เมื่อยกเลิก ใบฝากจะถูกปิดและสินค้าทั้งหมดกลับเข้าคลัง',
+  'cx.cancelledBy': 'ยกเลิกโดยเอกสาร',
+});
+Object.assign(I18N.en, {
+  'nav.cancelDoc': 'Cancel document', 'btn.reverse': 'Cancel document', 'status.REVERSED': 'Cancelled', 'msg.reversed': 'Document cancelled',
+  'lbl.reversesDoc': 'Cancels document', 'doc.searchPh': 'Search document number, customer/supplier or remark',
+  'cx.hint': 'Find the document and cancel it. Every line is undone: goods that were sold, withdrawn or returned to a supplier come back into the warehouse; received goods are taken out again.',
+  'cx.managerOnly': 'Only a manager or administrator can cancel documents', 'cx.pick': 'Select', 'cx.pickTitle': 'Documents that can be cancelled',
+  'cx.other': 'Pick another document', 'cx.effect': 'Stock effect', 'cx.backIn': 'back into stock', 'cx.takeOut': 'taken out of stock',
+  'cx.itemsTitle': 'All of these lines will be cancelled', 'cx.reason': 'Reason', 'cx.reasonPh': 'e.g. customer cancelled the bill, wrong entry',
+  'cx.reasonRequired': 'Please give a reason', 'cx.go': 'Cancel this document', 'cx.confirm': 'Cancel the whole document {no}? This cannot be undone.',
+  'cx.done': '{no} cancelled', 'cx.doneLong': 'Document {no} cancelled and stock restored. Cancellation:', 'cx.viewDoc': 'View original',
+  'cx.already': 'This document is already cancelled:', 'cx.isReversal': 'This is a cancellation document and cannot be cancelled:', 'cx.notPosted': 'Only confirmed documents can be cancelled; delete drafts on the document page:',
+  'cx.deposits': 'This bill has {n} open deposit(s). Cancelling closes them and returns all goods to stock.',
+  'cx.cancelledBy': 'Cancelled by',
+});
+Object.assign(I18N.lo, {
+  'nav.cancelDoc': 'ຍົກເລີກເອກະສານ', 'btn.reverse': 'ຍົກເລີກເອກະສານ', 'status.REVERSED': 'ຍົກເລີກແລ້ວ', 'msg.reversed': 'ຍົກເລີກເອກະສານແລ້ວ',
+  'lbl.reversesDoc': 'ຍົກເລີກເອກະສານ', 'doc.searchPh': 'ຄົ້ນຫາເລກທີເອກະສານ ຊື່ລູກຄ້າ/ຜູ້ສະໜອງ ຫຼື ໝາຍເຫດ',
+  'cx.hint': 'ຄົ້ນຫາເລກທີເອກະສານແລ້ວກົດຍົກເລີກ ລະບົບຈະຍ້ອນກັບທຸກລາຍການ: ສິນຄ້າທີ່ຂາຍ ເບີກ ຫຼື ສົ່ງຄືນຜູ້ສະໜອງ ຈະກັບເຂົ້າສາງ ສ່ວນໃບຮັບເຂົ້າຈະຖືກຕັດອອກຈາກສາງ',
+  'cx.managerOnly': 'ສະເພາະຜູ້ຈັດການ ຫຼື ຜູ້ດູແລລະບົບເທົ່ານັ້ນທີ່ຍົກເລີກເອກະສານໄດ້', 'cx.pick': 'ເລືອກ', 'cx.pickTitle': 'ເອກະສານທີ່ຍົກເລີກໄດ້',
+  'cx.other': 'ເລືອກເອກະສານອື່ນ', 'cx.effect': 'ຜົນຕໍ່ສາງ', 'cx.backIn': 'ຄືນເຂົ້າສາງ', 'cx.takeOut': 'ຕັດອອກຈາກສາງ',
+  'cx.itemsTitle': 'ລາຍການທີ່ຈະຖືກຍົກເລີກທັງໝົດ', 'cx.reason': 'ເຫດຜົນທີ່ຍົກເລີກ', 'cx.reasonPh': 'ເຊັ່ນ ລູກຄ້າຍົກເລີກບິນ, ປ້ອນຜິດ',
+  'cx.reasonRequired': 'ກະລຸນາໃສ່ເຫດຜົນທີ່ຍົກເລີກ', 'cx.go': 'ຢືນຢັນຍົກເລີກເອກະສານ', 'cx.confirm': 'ຍົກເລີກເອກະສານ {no} ທັງໃບ? ຍົກເລີກແລ້ວແກ້ຄືນບໍ່ໄດ້',
+  'cx.done': 'ຍົກເລີກ {no} ແລ້ວ', 'cx.doneLong': 'ຍົກເລີກເອກະສານ {no} ຮຽບຮ້ອຍ ສະຕັອກຖືກຄືນແລ້ວ ເອກະສານຍົກເລີກ:', 'cx.viewDoc': 'ເບິ່ງເອກະສານເດີມ',
+  'cx.already': 'ເອກະສານນີ້ຖືກຍົກເລີກແລ້ວ:', 'cx.isReversal': 'ນີ້ແມ່ນເອກະສານຍົກເລີກ ຍົກເລີກຊ້ຳບໍ່ໄດ້:', 'cx.notPosted': 'ຍົກເລີກໄດ້ສະເພາະເອກະສານທີ່ຢືນຢັນແລ້ວ ສະບັບຮ່າງໃຫ້ລຶບທີ່ໜ້າເອກະສານ:',
+  'cx.deposits': 'ບິນນີ້ມີໃບຝາກສາງຄ້າງຢູ່ {n} ໃບ ເມື່ອຍົກເລີກ ໃບຝາກຈະຖືກປິດ ແລະ ສິນຄ້າທັງໝົດກັບເຂົ້າສາງ',
+  'cx.cancelledBy': 'ຍົກເລີກໂດຍເອກະສານ',
+});

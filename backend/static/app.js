@@ -278,6 +278,88 @@
     return h('button', { type: 'button', class: 'pick-btn', onclick: () => productPicker(getOpts()) }, icon('check-list'), t('pk.open'));
   }
 
+  // ---------------------------------------------------------------- cancel a posted document
+  /** Find a posted document by its number and cancel it: every line is reversed, so goods that left
+      (sales, withdrawals, supplier returns) come back into the warehouse and goods that came in go out again. */
+  async function pageCancel(id) {
+    const V = viewFor();
+    const head = [h('p', {}, h('a', { href: '#/docs' }, '← ' + t('nav.docs'))), h('h2', {}, t('nav.cancelDoc')), h('p', { class: 'hint' }, t('cx.hint'))];
+    if (!isManager()) { V(...head, h('div', { class: 'banner warn' }, t('cx.managerOnly'))); return; }
+    if (!id) {
+      const box = h('div');
+      const pg = makePager(() => load(true));
+      const f = { q: '' };
+      async function load(keep) {
+        if (!keep) pg.page = 0;
+        try {
+          const rows = pg.take(await api('/documents' + qs({ q: f.q, status: 'POSTED', ...pg.q() })));
+          box.replaceChildren(table([t('lbl.date'), t('lbl.docType'), t('lbl.docNo'), t('lbl.warehouse'), t('lbl.party'), { label: t('lbl.lines'), num: true }, ''],
+            rows.filter((r) => r.reverses_document_id == null).map((r) => h('tr', { class: 'click', onclick: () => { location.hash = '#/cancel/' + r.document_id; } },
+              td(fmtDate(r.doc_date)), td(docTypeLabel(r.doc_type)), td(h('b', {}, r.doc_no)), td(r.warehouse_name),
+              td(r.customer_name || r.supplier_name || ''), td(r.line_count, true),
+              h('td', { class: 'num' }, h('a', { class: 'btn small', href: '#/cancel/' + r.document_id }, t('cx.pick')))))));
+        } catch (e) { fail(e); }
+      }
+      const inp = h('input', { type: 'search', class: 'bigsearch', placeholder: t('doc.searchPh'), 'aria-label': t('doc.searchPh'),
+        oninput: debounce((e) => { f.q = e.target.value.trim(); load(); }) });
+      V(...head, h('div', { class: 'filtercard' }, h('div', { class: 'searchrow' }, h('div', { class: 'searchbox' }, icon('search'), inp),
+        barcodeCameraButton((code) => { inp.value = code; f.q = code; load(); }))),
+        h('h3', { class: 'sect' }, t('cx.pickTitle')), box, pg.el);
+      inp.focus();
+      load();
+      return;
+    }
+    let d;
+    try { d = await api('/documents/' + id); } catch (e) { fail(e); location.hash = '#/cancel'; return; }
+    const back = h('a', { class: 'btn', href: '#/cancel' }, '← ' + t('cx.other'));
+    const groups = groupItems(d.items);
+    const outflow = OUTFLOW.includes(d.doc_type);
+    // effect of cancelling on each line: + comes back into the warehouse, − is taken out again
+    const effect = (g) => {
+      const base = g.items.reduce((a, i) => a + Number(i.base_qty), 0);
+      const sign = d.doc_type === 'ADJUSTMENT' ? -(g.adj_sign || 1) : outflow ? 1 : -1;
+      return h('span', { class: 'badge ' + (sign > 0 ? 'adj-in' : 'adj-out') }, (sign > 0 ? '+' : '−') + fmtNum(base) + ' ' + (sign > 0 ? t('cx.backIn') : t('cx.takeOut')));
+    };
+    const summary = h('div', { class: 'card grid' },
+      h('div', { class: 'kv' }, h('span', {}, t('lbl.docNo')), h('b', {}, d.doc_no)),
+      h('div', { class: 'kv' }, h('span', {}, t('lbl.docType')), h('b', {}, docTypeLabel(d.doc_type))),
+      h('div', { class: 'kv' }, h('span', {}, t('lbl.date')), h('b', {}, fmtDate(d.doc_date))),
+      h('div', { class: 'kv' }, h('span', {}, t('lbl.warehouse')), h('b', {}, d.warehouse_code + ' — ' + d.warehouse_name)),
+      h('div', { class: 'kv' }, h('span', {}, t('lbl.party')), h('b', {}, d.customer_name || d.supplier_name || '—')),
+      h('div', { class: 'kv' }, h('span', {}, t('lbl.status')), h('b', {}, statusBadge(d.status))));
+    const items = table(['#', t('lbl.code'), t('lbl.product'), t('lbl.qty'), { label: t('uq.total'), num: true }, t('cx.effect')],
+      groups.map((g, n) => h('tr', {}, td(n + 1), td(g.product_code), td(g.product_name),
+        td(g.items.map((i) => fmtNum(i.qty) + ' ' + unitName(i.unit_code)).join(' + ')),
+        td(fmtNum(g.items.reduce((a, i) => a + Number(i.base_qty), 0)), true), h('td', {}, effect(g)))));
+    if (d.reverses_document_id != null || d.status !== 'POSTED') {
+      const why = d.status === 'REVERSED' ? t('cx.already') : d.reverses_document_id != null ? t('cx.isReversal') : t('cx.notPosted');
+      V(...head, h('div', { class: 'banner warn' }, why, ' ',
+        d.reversed_by_document_id ? h('a', { href: '#/doc/' + d.reversed_by_document_id }, 'REV-' + d.doc_no) : h('a', { href: '#/doc/' + d.document_id }, d.doc_no)),
+        summary, items, h('div', { class: 'actions' }, back));
+      return;
+    }
+    const reason = h('textarea', { rows: 2, required: true, maxlength: 500, placeholder: t('cx.reasonPh') });
+    const go = h('button', { type: 'button', class: 'danger-solid', onclick: async () => {
+      if (!reason.value.trim()) { toast(t('cx.reasonRequired'), 'err'); reason.focus(); return; }
+      if (!confirm(t('cx.confirm', { no: d.doc_no }))) return;
+      go.disabled = true;
+      try {
+        const r = await api(`/documents/${id}/reverse`, { method: 'POST', body: { reason: reason.value.trim() }, headers: { 'Idempotency-Key': 'rev-' + id } });
+        toast(t('cx.done', { no: d.doc_no }));
+        V(...head, h('div', { class: 'banner ok' }, icon('check'), ' ', t('cx.doneLong', { no: d.doc_no }), ' ',
+          h('a', { href: '#/doc/' + r.reversal_document_id }, r.document.doc_no)),
+          summary, items, h('div', { class: 'actions' }, back, h('a', { class: 'btn', href: '#/doc/' + id }, t('cx.viewDoc'))));
+      } catch (e) { go.disabled = false; fail(e); }
+    } }, icon('ban'), t('cx.go'));
+    const openDeps = (d.deposits || []).filter((x) => x.status !== 'CANCELLED' && x.status !== 'COMPLETED');
+    V(...head, summary,
+      openDeps.length ? h('div', { class: 'banner warn' }, t('cx.deposits', { n: openDeps.length })) : null,
+      h('h3', { class: 'sect' }, t('cx.itemsTitle')), items,
+      h('div', { class: 'card' }, field(t('cx.reason') + ' *', reason),
+        h('div', { class: 'actions' }, back, h('span', { class: 'spacer' }), go)));
+    reason.focus();
+  }
+
   // ---------------------------------------------------------------- paging
   const PAGE_SIZES = [25, 50, 100, 200];
   const pageSize = () => { const n = Number(navStore.get('wms_page_size', '50')); return PAGE_SIZES.includes(n) ? n : 50; };
@@ -394,7 +476,8 @@
         ['#/stock', 'nav.stock', 'stock'], ['#/docs', 'nav.docs', 'docs'],
         canScan() ? ['#/scan', 'nav.scan', 'scan'] : null,
         ['#/deposits', 'nav.deposits', 'deposits'], ['#/transfers', 'nav.transfers', 'transfers'], ['#/counts', 'nav.counts', 'counts'],
-        myDocTypes().includes('ADJUSTMENT') ? ['#/new/ADJUSTMENT', 'nav.adjust', 'adjust'] : null]],
+        myDocTypes().includes('ADJUSTMENT') ? ['#/new/ADJUSTMENT', 'nav.adjust', 'adjust'] : null,
+        isManager() ? ['#/cancel', 'nav.cancelDoc', 'ban'] : null]],
       canImport() ? ['import', 'navg.import', 'importg', [['#/import', 'nav.import', 'import'], ['#/imports', 'nav.imports', 'imports']]] : null,
       ['reports', 'navg.reports', 'reportsg', [['#/movements', 'nav.movements', 'movements'], ['#/reports', 'nav.reports', 'reports']]],
       ['setup', 'navg.setup', 'setup', [
@@ -569,18 +652,21 @@
       } catch (e) { fail(e); }
     }
     const newBtns = [];
-    if (myDocTypes().length) newBtns.push(menuButton(h('span', {}, icon('plus'), t('doc.newMenu')), myDocTypes().map((x) => [docTypeLabel(x), '#/new/' + x]), 'primary'));
+    const createTypes = myDocTypes().filter((x) => x !== 'CUSTOMER_RETURN');   // returns go through "cancel document"
+    if (createTypes.length) newBtns.push(menuButton(h('span', {}, icon('plus'), t('doc.newMenu')), createTypes.map((x) => [docTypeLabel(x), '#/new/' + x]), 'primary'));
     if (canScan()) newBtns.push(h('a', { class: 'btn', href: '#/scan' }, icon('scan'), t('nav.scan')));
-    const docNoInput = h('input', { type: 'search', oninput: debounce((e) => { f.q = e.target.value; load(); }) });
+    if (isManager()) newBtns.push(h('a', { class: 'btn danger-btn', href: '#/cancel' }, icon('ban'), t('nav.cancelDoc')));
+    const docNoInput = h('input', { type: 'search', class: 'bigsearch', placeholder: t('doc.searchPh'), 'aria-label': t('doc.searchPh'),
+      oninput: debounce((e) => { f.q = e.target.value.trim(); load(); }) });
     // one card: the filters in a row, the "new document" / "scan bill" buttons underneath
     view(h('h2', {}, t('nav.docs')),
       h('div', { class: 'filtercard' },
+        h('div', { class: 'searchrow' }, h('div', { class: 'searchbox' }, icon('search'), docNoInput),
+          barcodeCameraButton((code) => { docNoInput.value = code; f.q = code; load(); })),
         h('div', { class: 'filters' },
           field(t('lbl.docType'), select([['', t('lbl.all')], ...DOC_TYPES.map((x) => [x, docTypeLabel(x)])], '', { onchange: (e) => { f.doc_type = e.target.value; load(); } })),
           field(t('lbl.warehouse'), select(whOptions(S.whs, true), '', { onchange: (e) => { f.warehouse_id = e.target.value; load(); } })),
           field(t('lbl.status'), select([['', t('lbl.all')], ...['DRAFT', 'POSTED', 'REVERSED'].map((x) => [x, t('status.' + x)])], '', { onchange: (e) => { f.status = e.target.value; load(); } })),
-          field(t('lbl.docNo'), h('div', { class: 'inline-input' }, docNoInput,
-            barcodeCameraButton((code) => { docNoInput.value = code; f.q = code; load(); }))),
           field(t('lbl.dateFrom'), h('input', { type: 'date', onchange: (e) => { f.date_from = e.target.value; load(); } })),
           field(t('lbl.dateTo'), h('input', { type: 'date', onchange: (e) => { f.date_to = e.target.value; load(); } }))),
         newBtns.length ? h('div', { class: 'df-actions' }, newBtns) : null),
@@ -609,14 +695,7 @@
         act.push(h('a', { class: 'btn', href: '#/deposit-new/' + id }, icon('deposits'), t('dep.createFromSale')));
       }
       if (d.status === 'POSTED' && !isRev && isManager()) {
-        act.push(h('button', { class: 'danger', onclick: async () => {
-          const reason = prompt(t('msg.reverseReason'));
-          if (reason === null) return;
-          try {
-            const r = await api(`/documents/${id}/reverse`, { method: 'POST', body: { reason: reason || null }, headers: { 'Idempotency-Key': 'rev-' + id } });
-            toast(t('msg.reversed')); location.hash = '#/doc/' + r.reversal_document_id;
-          } catch (e) { fail(e); }
-        } }, t('btn.reverse')));
+        act.push(h('a', { class: 'btn danger-btn', href: '#/cancel/' + id }, icon('ban'), t('btn.reverse')));
       }
     }
     const kv = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('b', {}, v ?? ''));
@@ -632,6 +711,8 @@
         kv(t('lbl.party'), d.customer_name || d.supplier_name || '—'), kv(t('lbl.createdBy'), d.created_by_name + ' ' + fmtDateTime(d.created_at)),
         d.posted_at ? kv(t('lbl.postedBy'), (d.posted_by_name || '') + ' ' + fmtDateTime(d.posted_at)) : null,
         d.reverses_document_id ? kv(t('lbl.reversesDoc'), h('a', { href: '#/doc/' + d.reverses_document_id }, '#' + d.reverses_document_id)) : null,
+        d.reversed_by_document_id ? kv(t('cx.cancelledBy'), h('a', { href: '#/doc/' + d.reversed_by_document_id }, 'REV-' + d.doc_no)) : null,
+        d.reversed_by_document_id && d.reversal_reason ? kv(t('cx.reason'), d.reversal_reason) : null,
         d.adjust_reason ? kv(t('adj.reason'), t('adj.r.' + d.adjust_reason)) : null,
         d.remark ? kv(t('lbl.remark'), d.remark) : null),
       h('div', { class: 'card lines-card' },
@@ -2330,7 +2411,8 @@
     const [page, arg] = [parts[0] || 'dashboard', parts[1]];
     renderShell();
     const run = {
-      stock: pageStock, docs: pageDocs, doc: () => pageDoc(Number(arg)), new: () => pageNewDoc(arg),
+      stock: pageStock, docs: pageDocs, doc: () => pageDoc(Number(arg)),
+      new: () => (arg === 'CUSTOMER_RETURN' ? pageCancel() : pageNewDoc(arg)), cancel: () => pageCancel(Number(arg) || null),
       dashboard: pageDashboard, reports: pageReports, account: pageAccount,
       import: pageImport, imports: pageImports,
       transfers: pageTransfers, 'transfer-new': pageNewTransfer, transfer: () => pageTransfer(Number(arg)),

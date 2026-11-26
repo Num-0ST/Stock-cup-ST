@@ -688,7 +688,10 @@ def _hash(payload: dict) -> str:
 def document_detail(conn, document_id: int) -> dict | None:
     d = conn.execute(
         """SELECT d.*, w.name AS warehouse_name, w.warehouse_code, c.name AS customer_name, s.name AS supplier_name,
-                  cu.full_name AS created_by_name, pu.full_name AS posted_by_name
+                  cu.full_name AS created_by_name, pu.full_name AS posted_by_name,
+                  (SELECT r.document_id FROM stock_documents r WHERE r.reverses_document_id = d.document_id LIMIT 1)
+                      AS reversed_by_document_id,
+                  (SELECT r.remark FROM stock_documents r WHERE r.reverses_document_id = d.document_id LIMIT 1) AS reversal_reason
            FROM stock_documents d JOIN warehouses w USING (warehouse_id)
            LEFT JOIN customers c USING (customer_id) LEFT JOIN suppliers s USING (supplier_id)
            JOIN users cu ON cu.user_id = d.created_by LEFT JOIN users pu ON pu.user_id = d.posted_by
@@ -758,7 +761,8 @@ def list_documents(doc_type: Optional[str] = None, warehouse_id: Optional[int] =
            WHERE d.warehouse_id = ANY(%(whs)s)
              AND (%(doc_type)s::text IS NULL OR d.doc_type = %(doc_type)s)
              AND (%(status)s::text IS NULL OR d.status = %(status)s)
-             AND (%(like)s::text IS NULL OR lower(d.doc_no) LIKE %(like)s)
+             AND (%(like)s::text IS NULL OR lower(d.doc_no) LIKE %(like)s OR lower(coalesce(c.name, '')) LIKE %(like)s
+                  OR lower(coalesce(s.name, '')) LIKE %(like)s OR lower(coalesce(d.remark, '')) LIKE %(like)s)
              AND (%(df)s::date IS NULL OR d.doc_date >= %(df)s)
              AND (%(dt)s::date IS NULL OR d.doc_date <= %(dt)s)
            ORDER BY d.document_id DESC LIMIT %(limit)s OFFSET %(offset)s""",

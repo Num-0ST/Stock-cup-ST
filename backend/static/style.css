@@ -524,3 +524,16 @@ dialog button.link { color: var(--brand); }
   .df-actions .menu-btn { width: 100%; }
 }
 .df-actions .menu-list { left: 0; right: auto; }
+
+/* big search row (documents, cancel page) */
+.searchrow { display: flex; gap: .6rem; align-items: stretch; margin: 0 0 .9rem; }
+.searchbox { flex: 1; position: relative; }
+.searchbox svg.i { position: absolute; left: .85rem; top: 50%; transform: translateY(-50%); color: #667085; pointer-events: none; }
+input.bigsearch { min-height: 46px; padding-left: 2.5rem; font-size: 1rem; }
+h3.sect { font-size: 1rem; margin: 1.25rem 0 .6rem; }
+.btn.danger-btn { color: var(--danger); border-color: #fda29b; }
+.btn.danger-btn:hover { background: var(--danger-bg); }
+button.danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+button.danger-solid:hover { background: #912018; border-color: #912018; }
+.banner { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.kv span.badge { display: inline-flex; }
